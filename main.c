@@ -6,7 +6,7 @@
 *
 *******************************************************************************
 * \copyright
-* (c) (2021-2023), Cypress Semiconductor Corporation (an Infineon company) or
+* (c) (2021-2026), Cypress Semiconductor Corporation (an Infineon company) or
 * an affiliate of Cypress Semiconductor Corporation.
 *
 * SPDX-License-Identifier: Apache-2.0
@@ -29,6 +29,7 @@
 #include "task.h"
 #include "cy_pdl.h"
 #include <string.h>
+#include <math.h>
 #include "cy_usb_common.h"
 #include "cy_usbss_cal_drv.h"
 #include "cy_usb_uvc_device.h"
@@ -57,40 +58,6 @@
 #define LOGGING_SCB                    (SCB1)
 #define LOGGING_SCB_IDX                (1)
 #define DEBUG_LEVEL                    (3u)
-#if USBFS_LOGS_ENABLE
-/* Select SCB interface used for UART based Command sending to FPGA. */
-#define FPGA_UART_SCB                  (SCB1)
-#define FPGA_UART_SCB_IDX              (1)
-#define SCB1_RXBUF_SIZE                (64)
-#endif /* USBFS_LOGS_ENABLE */
-
-#if PTM_ENABLE
-/* RTOS SW timer specific stuff */
-/* 100 ms */
-#define AUTO_RELOAD_TIMER_PERIOD (pdMS_TO_TICKS(2000UL))
-TimerHandle_t xAutoReloadTimer;
-BaseType_t xTimerStarted;
-#endif /* PTM_ENABLE */
-
-#if DEBUG_INFRA_EN
-/* Debug log related initilization */
-
-#define LOGBUF_SIZE (1024u)
-uint8_t logBuff[LOGBUF_SIZE];
-cy_stc_debug_config_t dbgCfg = {
-    .pBuffer         = logBuff,
-    .traceLvl        = DEBUG_LEVEL,
-    .bufSize         = LOGBUF_SIZE,
-#if USBFS_LOGS_ENABLE
-    .dbgIntfce       = CY_DEBUG_INTFCE_USBFS_CDC,
-#else
-    .dbgIntfce       = CY_DEBUG_INTFCE_UART_SCB1,
-#endif/* USBFS_LOGS_ENABLE */
-    .printNow        = true
-};
-
-TaskHandle_t printLogTaskHandle;
-#endif /* DEBUG_INFRA_EN */
 
 /* Global variables associated with High BandWidth DMA setup. */
 cy_stc_hbdma_context_t HBW_DrvCtxt;     /* High BandWidth DMA driver context. */
@@ -127,34 +94,82 @@ cy_stc_lvds_context_t lvdsContext;
 
 volatile uint32_t           gpioPmodeStatus = 0;
 
-/* Select SCB interface used for UART based Command sending to FPGA. */
-#define FPGA_UART_SCB             (SCB1)
-#define FPGA_UART_SCB_IDX         (1)
-#define SCB1_RXBUF_SIZE           (64)
-volatile uint8_t txDone;
-uint8_t scb_rx_buffer[SCB1_RXBUF_SIZE];
+#if PTM_ENABLE
+/* RTOS SW timer specific stuff */
+/* 100 ms */
+#define AUTO_RELOAD_TIMER_PERIOD (pdMS_TO_TICKS(2000UL))
+TimerHandle_t xAutoReloadTimer;
+BaseType_t xTimerStarted;
 
-void Cy_SysTickIntrWrapper (void)
+/******************************************************************************
+* Function Name: ITP_EnableCB
+*******************************************************************************
+* Summary:
+*  Callback function for software timer
+*
+* Parameters:
+*  xTimer
+
+* Return:
+*  Does not return.
+******************************************************************************/
+
+void ITP_EnableCB(TimerHandle_t xTimer)
 {
-    Cy_USBD_TickIncrement(&usbdCtxt);
-    xPortSysTickHandler();
+    Cy_USBSS_Cal_PTMConfig(&ssCalCtxt, true);
 }
 
-void vPortSetupTimerInterrupt(void)
-{
-    /* Register the exception vectors. */
-    Cy_SysInt_SetVector(PendSV_IRQn, xPortPendSVHandler);
-    Cy_SysInt_SetVector(SVCall_IRQn, vPortSVCHandler);
-    Cy_SysInt_SetVector(SysTick_IRQn, Cy_SysTickIntrWrapper);
+/*****************************************************************************
+* Function Name: Cy_SoftwareTimerInit
+******************************************************************************
+* Summary:
+*  Does some init for running rtos based auto reload software timer
+*  which periodically enables ITP interrupt for LDM exchange mechanism
+*
+* Parameters:
+*  void
 
-    /* Start the SysTick timer with a period of 1 ms. */
-    Cy_SysTick_SetClockSource(CY_SYSTICK_CLOCK_SOURCE_CLK_CPU);
-    Cy_SysTick_SetReload(hfclkFreq / 1000U);
-    Cy_SysTick_Clear();
-    Cy_SysTick_Enable();
-}
+* Return:
+*  Does not return.
+*****************************************************************************/
+void Cy_SoftwareTimerInit(void)
+{
+    DBG_APP_INFO("Initializing software timer\r\n");
+    xAutoReloadTimer = xTimerCreate("AutoReload",
+                                    AUTO_RELOAD_TIMER_PERIOD,
+                                    pdTRUE,
+                                    0,
+                                    ITP_EnableCB);
+
+    xTimerStarted = xTimerStart(xAutoReloadTimer, 0);
+    /* Configure to select 14 bits from Bus interval counter
+       for both links (Widelink)
+    */
+    LVDSSS_LVDS->SCRSS_VALUE_CFG[0] = 0x0AUL;
+    LVDSSS_LVDS->SCRSS_VALUE_CFG[1] = 0x0AUL;
+} /* Cy_SoftwareTimerInit() */
+
+#endif /* PTM_ENABLE */
 
 #if DEBUG_INFRA_EN
+/* Debug log related initialization */
+
+#define LOGBUF_SIZE (1024u)
+uint8_t logBuff[LOGBUF_SIZE];
+cy_stc_debug_config_t dbgCfg = {
+    .pBuffer         = logBuff,
+    .traceLvl        = DEBUG_LEVEL,
+    .bufSize         = LOGBUF_SIZE,
+#if USBFS_LOGS_ENABLE
+    .dbgIntfce       = CY_DEBUG_INTFCE_USBFS_CDC,
+#else
+    .dbgIntfce       = CY_DEBUG_INTFCE_UART_SCB1,
+#endif/* USBFS_LOGS_ENABLE */
+    .printNow        = true
+};
+
+TaskHandle_t printLogTaskHandle;
+
 /******************************************************************************
 * Function Name: Cy_DebugPrintTaskHandler(void *pTaskParam)
 *******************************************************************************
@@ -181,53 +196,31 @@ void Cy_DebugPrintTaskHandler(void *pTaskParam)
 } /* End of Cy_DebugPrintTaskHandler() */
 #endif /* DEBUG_INFRA_EN */
 
-#if PTM_ENABLE
-/******************************************************************************
-* Function Name: ITP_EnableCB
-*******************************************************************************
-* Summary:
-*  Callback function for software timer
-*
-* Parameters:
-*  xTimer
 
-* Return:
-*  Does not return.
-******************************************************************************/
 
-void ITP_EnableCB(TimerHandle_t xTimer)
+void Cy_SysTickIntrWrapper (void)
 {
-    USB32DEV->USB32DEV_PROT.PROT_INTR_MASK |= USB32DEV_PROT_INTR_ITP_EV_Msk;
+    Cy_USBD_TickIncrement(&usbdCtxt);
+    xPortSysTickHandler();
 }
 
-/******************************************************************************
-* Function Name: Software timer initialization
-*******************************************************************************
-* Summary:
-*  Does some init for running rtos based auto reload software timer
-*  which periodically enables ITP interrupt for LDM exchange mechanism
-*
-* Parameters:
-*  void
-
-* Return:
-*  Does not return.
-******************************************************************************/
-void Cy_SoftwareTimerInit(void)
+void vPortSetupTimerInterrupt(void)
 {
-    DBG_APP_INFO("Initializing software timer\r\n");
-    xAutoReloadTimer = xTimerCreate("AutoReload",
-                                    AUTO_RELOAD_TIMER_PERIOD,
-                                    pdTRUE,
-                                    0,
-                                    ITP_EnableCB);
+    /* Register the exception vectors. */
+    Cy_SysInt_SetVector(PendSV_IRQn, xPortPendSVHandler);
+    Cy_SysInt_SetVector(SVCall_IRQn, vPortSVCHandler);
+    Cy_SysInt_SetVector(SysTick_IRQn, Cy_SysTickIntrWrapper);
 
-    xTimerStarted = xTimerStart(xAutoReloadTimer, 0);
-} /* Cy_SoftwareTimerInit() */
-#endif /* PTM_ENABLE */
+    /* Start the SysTick timer with a period of 1 ms. */
+    Cy_SysTick_SetClockSource(CY_SYSTICK_CLOCK_SOURCE_CLK_CPU);
+    Cy_SysTick_SetReload(hfclkFreq / 1000U);
+    Cy_SysTick_Clear();
+    Cy_SysTick_Enable();
+}
+
 
 /******************************************************************************
-* Function Name: Cy_UVC_PrintLVDSConfigInfo(void) 
+* Function Name: Cy_UVC_PrintLVDSConfigInfo(void)
 *******************************************************************************
 * Summary:
 * Prints LVDS configuration information on debug terminal Along with
@@ -239,28 +232,34 @@ void Cy_SoftwareTimerInit(void)
 * Return:
 *  Does not return.
 ******************************************************************************/
-void Cy_UVC_PrintLVDSConfigInfo(void)
-{
-    DBG_APP_INFO("LVDS PHY Train pattern = 0x%x\n\r",cy_lvds0_config.phyConfig->phyTrainingPattern);
-    DBG_APP_INFO("LVDS LINK Train pattern = 0x%x\n\r",cy_lvds0_config.phyConfig->linkTrainingPattern);
-    switch(cy_lvds0_config.phyConfig->interfaceClock)
-    {
+void Cy_UVC_PrintLVDSConfigInfo(void) {
+    DBG_APP_INFO("LVDS PHY Train pattern = 0x%x\n\r",
+                 cy_lvds0_config.phyConfig->phyTrainingPattern);
+    DBG_APP_INFO("LVDS LINK Train pattern = 0x%x\n\r",
+                 cy_lvds0_config.phyConfig->linkTrainingPattern);
+    DBG_APP_INFO("LVDS Interface Clock Freq = ");
+    switch (cy_lvds0_config.phyConfig->interfaceClock) {
     case CY_LVDS_PHY_INTERFACE_CLK_625_MHZ:
-        DBG_APP_INFO("LVDS Interface Clock Freq = 625 MHz\n\r");
+        DBG_APP_INFO("625 MHz\n\r");
         break;
     case CY_LVDS_PHY_INTERFACE_CLK_156_25_MHZ:
-        DBG_APP_INFO("LVDS Interface Clock Freq = 156.25 MHz\n\r");
+        DBG_APP_INFO("156.25 MHz\n\r");
         break;
     case CY_LVDS_PHY_INTERFACE_CLK_148_5_MHZ:
-        DBG_APP_INFO("LVDS Interface Clock Freq = 148.5 MHz\n\r");
+        DBG_APP_INFO("148.5 MHz\n\r");
         break;
     case CY_LVDS_PHY_INTERFACE_CLK_74_25_MHZ:
-        DBG_APP_INFO("LVDS Interface Clock Freq = 74.25 MHz\n\r");
+        DBG_APP_INFO("74.25 MHz\n\r");
         break;
     default:
-        DBG_APP_INFO("Standard LVDS Freq is not set");
+        DBG_APP_INFO("LVDS Freq is %d KHz",
+                     cy_lvds0_config.phyConfig->interfaceClock_kHz);
         break;
-    }  
+    }
+
+    DBG_APP_INFO(
+        "LVDS Gearing Ratio = %d \n\r",
+        (uint8_t)pow(2.0, (double)cy_lvds0_config.phyConfig->gearingRatio));
 } /* End of Cy_UVC_PrintLVDSConfigInfo() */
 
 /******************************************************************************
@@ -272,10 +271,10 @@ void Cy_UVC_PrintLVDSConfigInfo(void)
  * Parameters:
  * \param smNo
  * state machine number
- * 
+ *
  * \param gpifEvent
  * GPIF event
- * 
+ *
  * \param cntxt
  * app context
  *
@@ -285,7 +284,7 @@ void Cy_UVC_PrintLVDSConfigInfo(void)
 void Cy_LVDS_GpifEventCb(uint8_t smNo, cy_en_lvds_gpif_event_type_t gpifEvent, void *cntxt)
 {
      uint8_t SmState = 0;
-    // CyU3vAppGpifIntr(&appCtxt);
+    // Cy_UVC_AppGpifIntr(&appCtxt);
     SmState = Cy_LVDS_GpifGetSMState(LVDSSS_LVDS,SmState);
     DBG_APP_INFO("Sm state = %d\n\r",SmState);
 } /* End of Cy_LVDS_GpifEventCb() */
@@ -299,89 +298,81 @@ void Cy_LVDS_GpifEventCb(uint8_t smNo, cy_en_lvds_gpif_event_type_t gpifEvent, v
  * Parameters:
  * \param smNo
  * state machine number
- * 
+ *
  * \param phyEvent
  * LVDS/LVCMOS PHY event
- * 
+ *
  * \param cntxt
  * app context
  *
  * Return:
  *  void
  *****************************************************************************/
-void Cy_LVDS_PhyEventCb(uint8_t smNo, cy_en_lvds_phy_events_t phyEvent, void *cntxt)
-{
-    cy_en_scb_i2c_status_t status;
-    if(phyEvent == CY_LVDS_PHY_L1_EXIT)
-    {
-        if(smNo == 0)
-        {
-           DBG_APP_INFO("P0_L1_Exit\r\n");
-        }
-        else
-        {
-           DBG_APP_INFO("P1_L1_Exit\r\n");
-        }
+void Cy_LVDS_PhyEventCb(uint8_t smNo, cy_en_lvds_phy_events_t phyEvent,
+                        void *cntxt) {
+    cy_stc_usb_app_ctxt_t *pAppCtxt = (cy_stc_usb_app_ctxt_t *)cntxt;
+    if (pAppCtxt == NULL) {
+        return;
     }
-    if(phyEvent == CY_LVDS_PHY_L1_ENTRY)
-    {
-        if(smNo == 0)
+
+#if LVDS_LOW_POWER_EN
+    if (phyEvent == CY_LVDS_PHY_L1_EXIT) {
+        CLR_BIT(pAppCtxt->bmLinkL1EnterStatus, 1 << smNo);
+        DBG_APP_INFO("L1_Exit Port:%d\r\n", smNo);
+        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+        cy_stc_usbd_app_msg_t xMsg;
+        xMsg.type = CY_LVDS_RETRAIN;
+
+        if(Cy_LVDS_IsWidelinkModeActive(LVDSSS_LVDS,&lvdsContext))
         {
-            DBG_APP_INFO("P0_L1_Entry\r\n");
+            if(pAppCtxt->bmLinkL1EnterStatus == 0)
+            {
+                xQueueSendFromISR(appCtxt.uvcMsgQueue, &(xMsg), &(xHigherPriorityTaskWoken));
+            }
         }
         else
         {
-            DBG_APP_INFO("P1_L1_Entry\r\n");
-        }
-    }
-    if(phyEvent == CY_LVDS_PHY_L3_ENTRY)
-    {
-        if(smNo == 0)
-        {
-            DBG_APP_INFO("P0_L3_Entry\r\n");
-        }
-        else
-        {
-            DBG_APP_INFO("P1_L3_Entry\r\n");
+            xQueueSendFromISR(appCtxt.uvcMsgQueue, &(xMsg), &(xHigherPriorityTaskWoken));
         }
     }
 
-    if (phyEvent == CY_LVDS_PHY_TRAINING_DONE)
-    {
-        DBG_APP_INFO("Port %d PHY Train Done\r\n",smNo);
+    if (phyEvent == CY_LVDS_PHY_L1_ENTRY) {
+        SET_BIT(pAppCtxt->bmLinkL1EnterStatus, 1 << smNo);
+        DBG_APP_INFO("L1_Entry Port:%d\r\n", smNo);
+    }
+
+    if (phyEvent == CY_LVDS_PHY_L3_ENTRY) {
+        SET_BIT(pAppCtxt->bmLinkL3EnterStatus, 1 << smNo);
+        Cy_LVDS_L3_Entry(LVDSSS_LVDS, &lvdsContext, smNo);
+        DBG_APP_INFO("L3_Entry Port:%d\r\n", smNo);
+    }
+#endif /*LVDS_LOW_POWER_EN*/
+    if (phyEvent == CY_LVDS_PHY_TRAINING_DONE) {
+        DBG_APP_TRACE("Port %d PHY Train Done\r\n", smNo);
+        SET_BIT(glPhyLinkTrainControl, PHY_TRAINING_DONE);
         glIsLVDSPhyTrainingDone = true;
     }
 
-    if (phyEvent == CY_LVDS_PHY_LNK_TRAIN_BLK_DET)
-    {
-        DBG_APP_INFO("Port %d Training Block Detected\r\n",smNo);
-        if(smNo)
-        {
+
+    if (phyEvent == CY_LVDS_PHY_LNK_TRAIN_BLK_DET) {
+        DBG_APP_TRACE("Port %d Link Training Block Detected\r\n", smNo);
+        if (smNo) {
+            SET_BIT(glPhyLinkTrainControl, P1_TRAINING_DONE);
             glIsLVDSLink1TrainingDone = true;
-            SET_BIT (glPhyLinkTrainControl, P1_TRAINING_DONE);
-            status = Cy_I2C_Write(FPGASLAVE_ADDR,FPGA_PHY_LINK_CONTROL_ADDRESS,glPhyLinkTrainControl,
-                                          FPGA_I2C_ADDRESS_WIDTH,FPGA_I2C_DATA_WIDTH);
-            ASSERT_NON_BLOCK(status == CY_SCB_I2C_SUCCESS, status);
-        }
-        else
-        {
-            #if !PORT1_EN
+        } else {
+#if !PORT1_EN
+            SET_BIT(glPhyLinkTrainControl, P0_TRAINING_DONE);
             glIsLVDSLink0TrainingDone = true;
-            SET_BIT (glPhyLinkTrainControl, P0_TRAINING_DONE);
-            status = Cy_I2C_Write(FPGASLAVE_ADDR,FPGA_PHY_LINK_CONTROL_ADDRESS,glPhyLinkTrainControl,
-                                          FPGA_I2C_ADDRESS_WIDTH,FPGA_I2C_DATA_WIDTH);
-            ASSERT_NON_BLOCK(status == CY_SCB_I2C_SUCCESS, status);
-            #endif /* !PORT1_EN */
+#endif /* !PORT1_EN */
         }
     }
-    if (phyEvent == CY_LVDS_PHY_LNK_TRAIN_BLK_DET_FAIL)
-    {
-        DBG_APP_ERR("Port %d Training Block Detect Failed\r\n",smNo);
+    if (phyEvent == CY_LVDS_PHY_LNK_TRAIN_BLK_DET_FAIL) {
+        DBG_APP_ERR("Port %d Link Training Block Detect Failed\r\n", smNo);
     }
 } /* End of Cy_LVDS_PhyEventCb() */
 
 /******************************************************************************
- * Function Name: Cy_LVDS_LowPowerEventCb(cy_en_lvds_low_power_events_t lowPowerEvent, 
+ * Function Name: Cy_LVDS_LowPowerEventCb(cy_en_lvds_low_power_events_t lowPowerEvent,
  *                                        void *cntxt)
  ******************************************************************************
  * Description: GPIF error callback function.
@@ -389,27 +380,42 @@ void Cy_LVDS_PhyEventCb(uint8_t smNo, cy_en_lvds_phy_events_t phyEvent, void *cn
  * Parameters:
  * \param lowPowerEvent
  * low power event
- * 
+ *
  * \param cntxt
  * app context
  *
  * Return:
  *  void
  *****************************************************************************/
-void Cy_LVDS_LowPowerEventCb(cy_en_lvds_low_power_events_t lowPowerEvent, void *cntxt)
-{
-    if(lowPowerEvent == CY_LVDS_LOW_POWER_LNK0_L3_EXIT)
-    {
+void Cy_LVDS_LowPowerEventCb(cy_en_lvds_low_power_events_t lowPowerEvent,
+                             void *cntxt) {
+    DBG_APP_INFO("Cy_LVDS_LowPowerEventCb\r\n");
+#if LVDS_LOW_POWER_EN
+    cy_stc_usb_app_ctxt_t *pAppCtxt = (cy_stc_usb_app_ctxt_t *)cntxt;
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    cy_stc_usbd_app_msg_t xMsg;
+    if (lowPowerEvent == CY_LVDS_LOW_POWER_LNK0_L3_EXIT) {
+        Cy_LVDS_L3_Exit(LVDSSS_LVDS, &lvdsContext, 0);
+        CLR_BIT(pAppCtxt->bmLinkL3EnterStatus, 1 << 0);
+        if (Cy_LVDS_IsWidelinkModeActive(LVDSSS_LVDS, &lvdsContext)) {
+            Cy_LVDS_L3_Exit(LVDSSS_LVDS, &lvdsContext, 1);
+            CLR_BIT(pAppCtxt->bmLinkL3EnterStatus, 1 << 1);
+        }
         DBG_APP_INFO("P0_L3_Exit\r\n");
     }
-    if(lowPowerEvent == CY_LVDS_LOW_POWER_LNK1_L3_EXIT)
-    {
+
+    if (lowPowerEvent == CY_LVDS_LOW_POWER_LNK1_L3_EXIT) {
+        Cy_LVDS_L3_Exit(LVDSSS_LVDS, &lvdsContext, 1);
+        CLR_BIT(pAppCtxt->bmLinkL3EnterStatus, 1 << 1);
         DBG_APP_INFO("P1_L3_Exit\r\n");
     }
+    xMsg.type = CY_LVDS_RETRAIN;
+    xQueueSendFromISR(appCtxt.uvcMsgQueue, &(xMsg), &(xHigherPriorityTaskWoken));
+#endif
 } /* End of Cy_LVDS_LowPowerEventCb() */
 
 /*****************************************************************************
- * Function Name: Cy_LVDS_GpifErrorCb(uint8_t smNo, cy_en_lvds_gpif_error_t gpifError, 
+ * Function Name: Cy_LVDS_GpifErrorCb(uint8_t smNo, cy_en_lvds_gpif_error_t gpifError,
  *                                    void *cntxt)
  *****************************************************************************
  * Description: GPIF error callback function.
@@ -417,10 +423,10 @@ void Cy_LVDS_LowPowerEventCb(cy_en_lvds_low_power_events_t lowPowerEvent, void *
  * Parameters:
  * \param smNo
  * state machine number
- * 
+ *
  * \param gpifError
  * GPIF error
- * 
+ *
  * \param cntxt
  * app context
  *
@@ -462,7 +468,7 @@ void Cy_LVDS_GpifErrorCb(uint8_t smNo, cy_en_lvds_gpif_error_t gpifError, void *
 } /* End of Cy_LVDS_GpifErrorCb() */
 
 /******************************************************************************
- * Function Name: Cy_LVDS_GpifThreadErrorCb(cy_en_lvds_gpif_thread_no_t ThNo, 
+ * Function Name: Cy_LVDS_GpifThreadErrorCb(cy_en_lvds_gpif_thread_no_t ThNo,
  *                       cy_en_lvds_gpif_thread_error_t ThError, void *cntxt)
  ******************************************************************************
  * Description: GPIF thread error callback function.
@@ -470,10 +476,10 @@ void Cy_LVDS_GpifErrorCb(uint8_t smNo, cy_en_lvds_gpif_error_t gpifError, void *
  * Parameters:
  * \param ThNo
  * thread number
- * 
+ *
  * \param ThError
  * thread error
- * 
+ *
  * \param cntxt
  * app context
  *
@@ -528,7 +534,7 @@ void Cy_LVDS_GpifThreadErrorCb (cy_en_lvds_gpif_thread_no_t ThNo,
 } /* End of Cy_LVDS_GpifThreadErrorCb() */
 
 /******************************************************************************
- * Function Name: Cy_LVDS_GpifThreadEventCb(cy_en_lvds_gpif_thread_no_t ThNo, 
+ * Function Name: Cy_LVDS_GpifThreadEventCb(cy_en_lvds_gpif_thread_no_t ThNo,
  *                        cy_en_lvds_gpif_thread_event_t ThEvent, void *cntxt)
  ******************************************************************************
  * Description: GPIF thread Event callback function.
@@ -536,10 +542,10 @@ void Cy_LVDS_GpifThreadErrorCb (cy_en_lvds_gpif_thread_no_t ThNo,
  * Parameters:
  * \param ThNo
  * thread number
- * 
+ *
  * \param ThEvent
  * thread event
- * 
+ *
  * \param cntxt
  * app context
  *
@@ -552,36 +558,35 @@ void Cy_LVDS_GpifThreadEventCb (cy_en_lvds_gpif_thread_no_t ThNo,
     switch(ThEvent)
     {
     case CY_LVDS_GPIF_HDR_FLG0_CLR:
-        // DBG_APP_INFO("Flag-0 has been cleared\r\n");
+        DBG_APP_TRACE("Flag-0 has been cleared\r\n");
         break;
 
     case CY_LVDS_GPIF_HDR_FLG1_CLR:
-        // DBG_APP_INFO("Flag-1 has been cleared\r\n");
+        DBG_APP_TRACE("Flag-1 has been cleared\r\n");
         break;
 
     case CY_LVDS_GPIF_HDR_FLG2_CLR:
-        DBG_APP_INFO("Flag-2 has been cleared\r\n");
+        DBG_APP_TRACE("Flag-2 has been cleared\r\n");
         break;
 
     case CY_LVDS_GPIF_HDR_FLG3_CLR:
-        DBG_APP_INFO("Flag-3 has been cleared\r\n");
+        DBG_APP_TRACE("Flag-3 has been cleared\r\n");
         break;
 
     case CY_LVDS_GPIF_HDR_FLG0_SET:
-        // Cy_GPIO_Inv(P8_5_PORT, P8_5_PIN);
-        // DBG_APP_INFO("Flag-0 has been set\r\n");
+        DBG_APP_TRACE("Flag-0 has been set\r\n");
         break;
 
     case CY_LVDS_GPIF_HDR_FLG1_SET:
-        // DBG_APP_INFO("Flag-1 has been set\r\n");
+        DBG_APP_TRACE("Flag-1 has been set\r\n");
         break;
 
     case CY_LVDS_GPIF_HDR_FLG2_SET:
-        DBG_APP_INFO("Flag-2 has been set\r\n");
+        DBG_APP_TRACE("Flag-2 has been set\r\n");
         break;
 
     case CY_LVDS_GPIF_HDR_FLG3_SET:
-        DBG_APP_INFO("Flag-3 has been set\r\n");
+        DBG_APP_TRACE("Flag-3 has been set\r\n");
         break;
     }
 } /* End of Cy_LVDS_GpifThreadEventCb () */
@@ -616,6 +621,169 @@ cy_stc_lvds_md_config_t mdArray0[16] = {
     {0x0000,                           CY_LVDS_MD_CONSTANT}
 };
 
+
+#if CUSTOM_TRAIN_ENABLE
+
+/****************************************************************************
+ * Function Name: Cy_LVDS_InitAndTrain
+ ****************************************************************************
+ *
+ * Function to initialize the LVDS block, complete custom training and then
+ * de-initialize the block.
+ *
+ ***************************************************************************/
+static void Cy_LVDS_InitAndTrain (void)
+{
+    uint32_t intState;
+
+    /* First initialize the LVDS block in char mode for custom training. */
+    Cy_LVDS_CustomTraining_Select(true, &HBW_MgrCtxt);
+    Cy_LVDS_Init(LVDSSS_LVDS, PORT1_EN, &cy_lvds0_config, &lvdsContext);
+
+    /* Thread errors are expected during custom training. Don't register for those errors here. */
+    Cy_LVDS_SetInterruptMask(LVDSSS_LVDS,
+            LVDSSS_LVDS_LVDS_INTR_WD0_LNK0_TRAINING_DONE_Msk |
+            LVDSSS_LVDS_LVDS_INTR_WD0_LNK1_TRAINING_DONE_Msk|
+            LVDSSS_LVDS_LVDS_INTR_WD0_LNK0_TRAINING_BLK_DETECTED_Msk |
+            LVDSSS_LVDS_LVDS_INTR_WD0_LNK1_TRAINING_BLK_DETECTED_Msk |
+            LVDSSS_LVDS_LVDS_INTR_WD0_LNK0_TRAINING_BLK_DET_FAILD_Msk |
+            LVDSSS_LVDS_LVDS_INTR_WD0_LNK1_TRAINING_BLK_DET_FAILD_Msk|
+            LVDSSS_LVDS_LVDS_INTR_WD0_PHY_LINK0_INTERRUPT_Msk |
+            LVDSSS_LVDS_LVDS_INTR_WD0_PHY_LINK1_INTERRUPT_Msk);
+
+    /* Register callbacks from the LVDS driver. */
+    Cy_LVDS_RegisterCallback(LVDSSS_LVDS, &cb, &lvdsContext, &appCtxt);
+
+    /* Enable the LVDS block. */
+    Cy_LVDS_Enable(LVDSSS_LVDS);
+
+    /* Signal FPGA to start PHY training and then call Cy_LVDS_PhyTrainingStart() */
+    Cy_LVDS_PhyGpioSet(LVDSSS_LVDS, LINK_READY_CTL_PORT, LINK_READY_CTL_PIN);
+    Cy_LVDS_PhyTrainingStart(LVDSSS_LVDS, PORT1_EN, cy_lvds0_config.phyConfig);
+
+    /* Run the training task until it completes. */
+    do {
+        vTaskDelay(1);
+        Cy_GPIO_Inv(P11_0_PORT, P11_0_PIN);
+    } while (Cy_LVDS_CustomTraining_Task(&lvdsContext));
+    Cy_GPIO_Inv(P11_0_PORT, P11_0_PIN);
+
+    /* De-initialize the LVDS block completely. */
+    Cy_LVDS_Disable(LVDSSS_LVDS);
+
+    Cy_LVDS_Deinit(LVDSSS_LVDS, PORT1_EN, &lvdsContext);
+
+    /* Disable and re-enable the LVDS DMA adapters. */
+    intState = Cy_SysLib_EnterCriticalSection();
+    Cy_HBDma_DeInit(&HBW_DrvCtxt);
+    Cy_HBDma_Init(LVDSSS_LVDS, USB32DEV, &HBW_DrvCtxt, 0, 0);
+    Cy_HBDma_Mgr_SetLvdsAdapterIngressMode(&HBW_MgrCtxt, true, true);
+    Cy_SysLib_ExitCriticalSection(intState);
+
+    /* Disable char mode before re-initializing the LVDS block. */
+    Cy_LVDS_CustomTraining_Select(false, &HBW_MgrCtxt);
+}
+
+#endif /* CUSTOM_TRAIN_ENABLE */
+
+#if LVDS_LOW_POWER_EN
+/*****************************************************************************
+ * Function Name: Cy_App_LvdsRetraining
+ *****************************************************************************
+ *
+ * Perform LVDS link retraining by toggling LINK_READY to signal the FPGA
+ * and restarting PHY training, GPIF state machine, and data streaming.
+ *
+ * \param pAppCtxt
+ * Pointer to the application context structure.
+ *
+ * \return
+ * CY_LVDS_SUCCESS or error status from the LVDS PDL functions.
+ *
+ ****************************************************************************/
+void Cy_App_LvdsRetraining(cy_stc_usb_app_ctxt_t *pAppCtxt)
+{
+    cy_en_lvds_status_t lvdsStatus = CY_LVDS_SUCCESS;
+    cy_en_scb_i2c_status_t i2c_status;
+    LOG_COLOR("Initiate LVDS Retraining\r\n");
+    glIsLVDSLink1TrainingDone = false;
+    glIsLVDSLink0TrainingDone = false;
+    glIsLVDSPhyTrainingDone = false;
+    CLR_BIT(glPhyLinkTrainControl, PHY_TRAINING_DONE | P0_TRAINING_DONE | P1_TRAINING_DONE);
+#if CUSTOM_TRAIN_ENABLE
+    /* Apply the previously identified optimal slave DLL phases. */
+    Cy_LVDS_CustomTraining_ApplyResults(&lvdsContext, PORT1_EN);
+#endif /* CUSTOM_TRAIN_ENABLE */
+
+    /* Toggle LINK_READY to signal FPGA to restart from PHY training. */
+    Cy_LVDS_PhyGpioClr(LVDSSS_LVDS, LINK_READY_CTL_PORT, LINK_READY_CTL_PIN);
+    Cy_LVDS_PhyGpioSet(LVDSSS_LVDS, LINK_READY_CTL_PORT, LINK_READY_CTL_PIN);
+
+    /*
+     * Run through PHY training. When custom training is enabled, this is still
+     * needed so that the receiver can identify the byte boundaries correctly.
+     */
+    lvdsStatus = Cy_LVDS_PhyTrainingStart(LVDSSS_LVDS, PORT1_EN,
+                                          cy_lvds0_config.phyConfig);
+    ASSERT_NON_BLOCK(lvdsStatus == CY_LVDS_SUCCESS, lvdsStatus);
+    vTaskDelay(5);
+        if (glIsLVDSPhyTrainingDone) {
+            i2c_status =
+                Cy_I2C_Write(FPGASLAVE_ADDR, FPGA_PHY_LINK_CONTROL_ADDRESS,
+                             glPhyLinkTrainControl, FPGA_I2C_ADDRESS_WIDTH,
+                             FPGA_I2C_DATA_WIDTH);
+            ASSERT_NON_BLOCK(i2c_status == CY_SCB_I2C_SUCCESS, i2c_status);
+        }
+
+        if (glIsLVDSLink0TrainingDone) {
+            i2c_status =
+                Cy_I2C_Write(FPGASLAVE_ADDR, FPGA_PHY_LINK_CONTROL_ADDRESS,
+                             glPhyLinkTrainControl, FPGA_I2C_ADDRESS_WIDTH,
+                             FPGA_I2C_DATA_WIDTH);
+            ASSERT_NON_BLOCK(i2c_status == CY_SCB_I2C_SUCCESS, i2c_status);
+        }
+
+        if (glIsLVDSLink1TrainingDone) {
+            SET_BIT(glPhyLinkTrainControl, P1_TRAINING_DONE);
+            i2c_status =
+                Cy_I2C_Write(FPGASLAVE_ADDR, FPGA_PHY_LINK_CONTROL_ADDRESS,
+                             glPhyLinkTrainControl, FPGA_I2C_ADDRESS_WIDTH,
+                             FPGA_I2C_DATA_WIDTH);
+            ASSERT_NON_BLOCK(i2c_status == CY_SCB_I2C_SUCCESS, i2c_status);
+        }
+        DBG_APP_INFO("LVDSLink0Training %d LVDSLink1Training %d \r\n",
+                     glIsLVDSLink0TrainingDone, glIsLVDSLink1TrainingDone);
+    /* Enable Thread0 by default. */
+    Cy_LVDS_GpifThreadConfig(LVDSSS_LVDS, CY_LVDS_GPIF_THREAD_0, 0, 0, 1, 4);
+
+    Cy_USBD_AddEvtToLog(&usbdCtxt, CY_USB_EVT_LVDS_EN);
+    lvdsStatus = Cy_LVDS_GpifSMStart(LVDSSS_LVDS, PORT1_EN, 0, 0);
+    ASSERT_NON_BLOCK(CY_LVDS_SUCCESS == lvdsStatus, lvdsStatus);
+
+    // i2cStatus = Cy_FPGA_I2CRegWrite(DEVICE0_OFFSET +
+    // FPGA_DEVICE_STREAM_ENABLE_ADDRESS, CAMERA_APP_ENABLE);
+    // ASSERT_NON_BLOCK(i2cStatus == CY_SCB_I2C_SUCCESS, i2cStatus);
+    LOG_COLOR("LVDS Retraining Done\r\n");
+    // return lvdsStatus;
+}
+#endif /*LVDS_LOW_POWER_EN*/
+
+/******************************************************************************
+* Function Name: cy_usb_get_lvds_phy_gear_ratio(void)
+*******************************************************************************
+*
+* Get the LVDS PHY Gearing ration
+*
+* Parameters:
+*
+*
+* Return:
+*  Gearing ratio used to configure the LVDS IP
+******************************************************************************/
+uint8_t cy_usb_get_lvds_phy_gear_ratio (void)
+{
+    return ((uint8_t) cy_lvds0_config.phyConfig->gearingRatio);
+}
 /*****************************************************************************
  * Function Name: Cy_LVDS_LVCMOS_Init
  *****************************************************************************
@@ -632,169 +800,177 @@ cy_stc_lvds_md_config_t mdArray0[16] = {
 void Cy_LVDS_LVCMOS_Init (void)
 {
     cy_en_lvds_status_t status = CY_LVDS_SUCCESS;
+    uint32_t smIntrMask = LVDSSS_LVDS_LVDS_INTR_MASK_WD0_GPIF0_INTERRUPT_Msk;
+    cy_en_scb_i2c_status_t i2c_status ;
     /* link training retry count */
     uint8_t LinkTrainRetry = 1;
-
-    /* Data and address lines are alywas inputs for state machine 0 */
-    LVDSSS_LVDS->GPIF[0].GPIF_AD_CONFIG |= _VAL2FLD(LVDSSS_LVDS_GPIF_GPIF_AD_CONFIG_DQ_INP_EN_CFG, 0x1u) |
-                                           _VAL2FLD(LVDSSS_LVDS_GPIF_GPIF_AD_CONFIG_A_INP_EN_CFG, 0x1u);
-
-    #if !PORT1_EN
-    Cy_LVDS_PhySetInterruptMask(LVDSSS_LVDS,0, LVDSSS_LVDS_AFE_PHY_INTR_MONITOR_ADJUST_FAIL_Msk);
-    #endif
-    Cy_LVDS_PhySetInterruptMask(LVDSSS_LVDS,1, LVDSSS_LVDS_AFE_PHY_INTR_MONITOR_ADJUST_FAIL_Msk);
-
-    Cy_LVDS_SetInterruptMask(LVDSSS_LVDS, LVDSSS_LVDS_LVDS_INTR_MASKED_WD0_GPIF0_INTERRUPT_Msk|LVDSSS_LVDS_LVDS_INTR_MASKED_WD0_GPIF1_INTERRUPT_Msk|LVDSSS_LVDS_LVDS_INTR_WD0_LNK0_TRAINING_DONE_Msk |
-                                              LVDSSS_LVDS_LVDS_INTR_WD0_LNK1_TRAINING_DONE_Msk|
-                                              LVDSSS_LVDS_LVDS_INTR_WD0_LNK0_TRAINING_BLK_DETECTED_Msk | LVDSSS_LVDS_LVDS_INTR_WD0_LNK1_TRAINING_BLK_DETECTED_Msk |
-                                              LVDSSS_LVDS_LVDS_INTR_WD0_LNK0_TRAINING_BLK_DET_FAILD_Msk | LVDSSS_LVDS_LVDS_INTR_WD0_LNK1_TRAINING_BLK_DET_FAILD_Msk|
-                                              LVDSSS_LVDS_LVDS_INTR_WD0_LNK0_L1_ENTRY_Msk | LVDSSS_LVDS_LVDS_INTR_WD0_LNK1_L1_ENTRY_Msk |
-                                              LVDSSS_LVDS_LVDS_INTR_WD0_LNK0_L1_EXIT_Msk | LVDSSS_LVDS_LVDS_INTR_WD0_LNK1_L1_EXIT_Msk |
-                                              LVDSSS_LVDS_LVDS_INTR_WD0_LNK0_L3_ENTRY_Msk | LVDSSS_LVDS_LVDS_INTR_WD0_LNK1_L3_ENTRY_Msk | LVDSSS_LVDS_LVDS_INTR_WD0_PHY_LINK0_INTERRUPT_Msk |
-                                              LVDSSS_LVDS_LVDS_INTR_WD0_PHY_LINK1_INTERRUPT_Msk | LVDSSS_LVDS_LVDS_INTR_WD0_THREAD0_ERR_Msk | LVDSSS_LVDS_LVDS_INTR_WD0_THREAD1_ERR_Msk |
-                                              LVDSSS_LVDS_LVDS_INTR_WD0_THREAD2_ERR_Msk | LVDSSS_LVDS_LVDS_INTR_WD0_THREAD3_ERR_Msk | LVDSSS_LVDS_LVDS_INTR_MASK_WD0_GPIF0_INTERRUPT_Msk);
-
-    Cy_LVDS_RegisterCallback(LVDSSS_LVDS, &cb, &lvdsContext,&appCtxt);
-
-#if (LVCMOS_EN && (!INMD_EN) )
-    #if THREAD_INTERLEAVE_EN /* Two thread */
-    status = Cy_LVDS_GpifThreadConfig(LVDSSS_LVDS, 0, 0, 0, 0, 1);
-    status = Cy_LVDS_GpifThreadConfig(LVDSSS_LVDS, 1, 1, 0, 0, 1);
-    // Cy_LVDS_ThreadIntlvEnable(LVDSSS_LVDS,CY_LVDS_TH0_TH1_INTERLEAVED);
-    DBG_APP_INFO("Two Threads are created\r\n");
-    #else //Single thread
-    // status = Cy_LVDS_GpifThreadConfig(LVDSSS_LVDS, 0, 0, 0, 0, 1);
-    ASSERT_NON_BLOCK(CY_LVDS_SUCCESS == status, status);
-    DBG_APP_INFO("One Thread created\r\n");
-    #endif
-#else    //LVDS mode
-    Cy_LVDS_SetFlagInterruptMask(LVDSSS_LVDS, LVDSSS_LVDS_LVDS_INTR_WD1_TH0_HDR_FLGS_CLR_BIT0_Msk|LVDSSS_LVDS_LVDS_INTR_WD1_TH0_HDR_FLGS_SET_BIT0_Msk);
-#endif
+    uint8_t portIdx = 0;
+    uint8_t thrdIdx = 0;
+    uint8_t scktIdx = 0;
 
 #if PORT1_EN
-
-    #if THREAD_INTERLEAVE_EN /* Two thread configuration */
-    status = Cy_LVDS_GpifThreadConfig(LVDSSS_LVDS, 2, 16, 0, 0, 1);
-    status = Cy_LVDS_GpifThreadConfig(LVDSSS_LVDS, 3, 17, 0, 0, 1);
-    ASSERT_NON_BLOCK(CY_LVDS_SUCCESS == status, status);
-    #else /* Single Threa configuration */
-    status = Cy_LVDS_GpifThreadConfig(LVDSSS_LVDS, 2, 16, 0, 0, 1);
-    ASSERT_NON_BLOCK(CY_LVDS_SUCCESS == status, status);
-    #endif /* THREAD_INTERLEAVE_EN */
-    Cy_USBD_AddEvtToLog(&usbdCtxt, CY_USB_EVT_PPORT1_EN);
-    do
-    {
-     /* Make sure Link Ready signal is Low before link training */
-    Cy_LVDS_PhyGpioClr(LVDSSS_LVDS, LINK_READY_CTL_PORT, LINK_READY_CTL_PIN);
-    // Cy_LVDS_Deinit(LVDSSS_LVDS, 1, &lvdsContext);
-    DBG_APP_INFO("LVDS0_Deinit done\r\n");
-    glIsLVDSLink1TrainingDone = false;
-    glIsLVDSLink0TrainingDone = false;
-    CLR_BIT (glPhyLinkTrainControl, P0_TRAINING_DONE);
-    CLR_BIT (glPhyLinkTrainControl, P1_TRAINING_DONE);
-    Cy_LVDS_Init(LVDSSS_LVDS, 1, &cy_lvds0_config, &lvdsContext);
-    ASSERT_NON_BLOCK(CY_LVDS_SUCCESS == status, status);
-    Cy_LVDS_Enable(LVDSSS_LVDS);
-
-    DBG_APP_INFO("LVDS Training Started\r\n");
-    #if LINK_TRAINING_EN
-    Cy_LVDS_PhyGpioSet(LVDSSS_LVDS, LINK_READY_CTL_PORT, LINK_READY_CTL_PIN);
-    #endif /* LINK_TRAINING_EN */
-    #if (!LVCMOS_EN)
-    status = Cy_LVDS_PhyTrainingStart(LVDSSS_LVDS, 1, cy_lvds0_config.phyConfig);
-    ASSERT_NON_BLOCK(CY_LVDS_SUCCESS == status, status);
-    #endif /* !LVCMOS_EN */
-    /* Set Interrupt Mask for GPIF */
-    Cy_LVDS_SetInterruptMask(LVDSSS_LVDS, LVDSSS_LVDS_LVDS_INTR_MASK_WD0_GPIF1_INTERRUPT_Msk);
-    DBG_APP_INFO("Set Interrupt Mask for GPIF\r\n");
-
-#if LVCMOS_EN
-    status = Cy_LVDS_GpifSMStart(LVDSSS_LVDS, 1, 0, 0xC);
-    ASSERT_NON_BLOCK(CY_LVDS_SUCCESS == status, status);
-#else
-    status = Cy_LVDS_GpifSMStart(LVDSSS_LVDS, 1, 0, 0);
-    ASSERT_NON_BLOCK(CY_LVDS_SUCCESS == status, status);
+        portIdx = 1;
+        thrdIdx = 2;
+        scktIdx = 16;
 #endif
-    DBG_APP_INFO("P1_GPIF SM_Start\r\n");
 
-#else /* PORT 0 or WIDELINK */
-    #if THREAD_INTERLEAVE_EN /* Two Thread configuration */
-    status = Cy_LVDS_GpifThreadConfig(LVDSSS_LVDS, 0, 0, 0, 0, 1);
-    status = Cy_LVDS_GpifThreadConfig(LVDSSS_LVDS, 1, 1, 0, 0, 1);
-    #else /* Single Thread configuration */
-    status = Cy_LVDS_GpifThreadConfig(LVDSSS_LVDS, 0, 0, 0, 0, 1);
-    #endif
+    i2c_status = Cy_I2C_Read(FPGASLAVE_ADDR, FPGA_PHY_LINK_CONTROL_ADDRESS,
+                            &glPhyLinkTrainControl, FPGA_I2C_ADDRESS_WIDTH,
+                            FPGA_I2C_DATA_WIDTH);
+    ASSERT_NON_BLOCK(i2c_status == CY_SCB_I2C_SUCCESS, i2c_status);
 
     do
     {
-        DBG_APP_INFO("LVDS Training Started\r\n");
-        // Cy_LVDS_Deinit(LVDSSS_LVDS, 0, &lvdsContext);
-        DBG_APP_INFO("LVDS0_Deinit done\r\n");
-        Cy_LVDS_Disable(LVDSSS_LVDS);
-        DBG_APP_INFO("LVDS Disable\r\n");
-        Cy_SysLib_DelayUs(10);//Delay 10uS
+            Cy_LVDS_Deinit(LVDSSS_LVDS, portIdx, &lvdsContext);
+            DBG_APP_INFO("LVDS0_Deinit done\r\n");
+            Cy_LVDS_Disable(LVDSSS_LVDS);
+            DBG_APP_INFO("LVDS Disable\r\n");
+            Cy_SysLib_DelayUs(10); /* Delay 10uS */
+
         /* Make sure Link Ready signal is Low before link training */
 #if (FPGA_ENABLE && LINK_TRAINING_EN)
         Cy_LVDS_PhyGpioClr(LVDSSS_LVDS, LINK_READY_CTL_PORT, LINK_READY_CTL_PIN);
 #endif /* FPGA_ENABLE && LINK_TRAINING_EN */
+
+        /* Clear PHY and LINK training flags */
         glIsLVDSLink1TrainingDone = false;
         glIsLVDSLink0TrainingDone = false;
-        CLR_BIT (glPhyLinkTrainControl, P0_TRAINING_DONE);
-        CLR_BIT (glPhyLinkTrainControl, P1_TRAINING_DONE);
-        status = Cy_LVDS_Init(LVDSSS_LVDS,0,&cy_lvds0_config,&lvdsContext);
-        ASSERT_NON_BLOCK(CY_LVDS_SUCCESS == status, status);
+        glIsLVDSPhyTrainingDone = false;
+        CLR_BIT (glPhyLinkTrainControl, PHY_TRAINING_DONE|P0_TRAINING_DONE|P1_TRAINING_DONE);
 
-        Cy_LVDS_SetInterruptMask(LVDSSS_LVDS, LVDSSS_LVDS_LVDS_INTR_MASK_WD0_GPIF0_INTERRUPT_Msk | LVDSSS_LVDS_LVDS_INTR_MASK_WD0_LNK0_TRAINING_DONE_Msk | LVDSSS_LVDS_LVDS_INTR_MASK_WD0_LNK1_TRAINING_DONE_Msk);
-        Cy_LVDS_SetInterruptMask(LVDSSS_LVDS, LVDSSS_LVDS_LVDS_INTR_MASK_WD0_LNK0_TRAINING_BLK_DET_FAILD_Msk | LVDSSS_LVDS_LVDS_INTR_MASK_WD0_LNK1_TRAINING_BLK_DET_FAILD_Msk);
-        Cy_LVDS_Enable(LVDSSS_LVDS);
+#if CUSTOM_TRAIN_ENABLE
+        DBG_APP_INFO("FIRMWARE BASED PHY_TRAIN ENABLED \r\n");
+        DBG_APP_INFO("Training Started\r\n");
+        Cy_LVDS_InitAndTrain();
+#endif
+        Cy_LVDS_SetInterruptMask(LVDSSS_LVDS,
+            LVDSSS_LVDS_LVDS_INTR_WD0_LNK0_TRAINING_DONE_Msk |
+            LVDSSS_LVDS_LVDS_INTR_WD0_LNK1_TRAINING_DONE_Msk|
+            LVDSSS_LVDS_LVDS_INTR_WD0_LNK0_TRAINING_BLK_DETECTED_Msk |
+            LVDSSS_LVDS_LVDS_INTR_WD0_LNK1_TRAINING_BLK_DETECTED_Msk |
+            LVDSSS_LVDS_LVDS_INTR_WD0_LNK0_TRAINING_BLK_DET_FAILD_Msk |
+            LVDSSS_LVDS_LVDS_INTR_WD0_LNK1_TRAINING_BLK_DET_FAILD_Msk|
+            LVDSSS_LVDS_LVDS_INTR_WD0_LNK0_L1_ENTRY_Msk |
+            LVDSSS_LVDS_LVDS_INTR_WD0_LNK1_L1_ENTRY_Msk |
+            LVDSSS_LVDS_LVDS_INTR_WD0_LNK0_L1_EXIT_Msk |
+            LVDSSS_LVDS_LVDS_INTR_WD0_LNK1_L1_EXIT_Msk |
+            LVDSSS_LVDS_LVDS_INTR_WD0_LNK0_L3_ENTRY_Msk |
+            LVDSSS_LVDS_LVDS_INTR_WD0_LNK1_L3_ENTRY_Msk |
+            LVDSSS_LVDS_LVDS_INTR_WD0_PHY_LINK0_INTERRUPT_Msk |
+            LVDSSS_LVDS_LVDS_INTR_WD0_PHY_LINK1_INTERRUPT_Msk |
+            LVDSSS_LVDS_LVDS_INTR_WD0_THREAD0_ERR_Msk |
+            LVDSSS_LVDS_LVDS_INTR_WD0_THREAD1_ERR_Msk |
+            LVDSSS_LVDS_LVDS_INTR_WD0_THREAD2_ERR_Msk |
+            LVDSSS_LVDS_LVDS_INTR_WD0_THREAD3_ERR_Msk);
 
-#if LINK_TRAINING_EN
-        Cy_LVDS_PhyGpioSet(LVDSSS_LVDS, LINK_READY_CTL_PORT, LINK_READY_CTL_PIN); /* Drive Link Ready HIGH*/
+
+#if PORT1_EN
+        Cy_USBD_AddEvtToLog(&usbdCtxt, CY_USB_EVT_PPORT1_EN);
+        smIntrMask = LVDSSS_LVDS_LVDS_INTR_MASK_WD0_GPIF1_INTERRUPT_Msk;
+#else
+        Cy_USBD_AddEvtToLog(&usbdCtxt, CY_USB_EVT_PPORT0_EN);
 #endif
 
-        /* In case of LVDS call PHY Training for PORT0 */
-#if (!LVCMOS_EN)
-        status = Cy_LVDS_PhyTrainingStart(LVDSSS_LVDS, 0, cy_lvds0_config.phyConfig);
+       /* The same configuration is used regardless of the port to be initialized. */
+        status = Cy_LVDS_Init(LVDSSS_LVDS, portIdx, &cy_lvds0_config, &lvdsContext);
         ASSERT_NON_BLOCK(CY_LVDS_SUCCESS == status, status);
+        DBG_APP_INFO("LVDS_Init done\r\n");
+
+        Cy_LVDS_SetInterruptMask(LVDSSS_LVDS, smIntrMask);
+        DBG_APP_INFO("Set Interrupt Mask for GPIF-SM\r\n");
+#if LVDS_LOW_POWER_EN
+    /* Allow entry to LVDS L1 and L3 states */
+    Cy_LVDS_AllowL1Entry(LVDSSS_LVDS, CY_LVDS_LVCMOS_PORT_0);
+    Cy_LVDS_AllowL1Entry(LVDSSS_LVDS, CY_LVDS_LVCMOS_PORT_1);
+
+    Cy_LVDS_AllowL3Entry(LVDSSS_LVDS, CY_LVDS_LVCMOS_PORT_0);
+    Cy_LVDS_AllowL3Entry(LVDSSS_LVDS, CY_LVDS_LVCMOS_PORT_1);
+
+    /* Enable interrupts on wakeup from L3 exit for Link 0 and Link 1 */
+    Cy_LVDS_SetWakeupInterruptMask(LVDSSS_LVDS, LVDSSS_LVDS_LVDS_LOW_PWR_INTR_LVDS_WAKEUP_INTR_SET_LNK0_L3_EXIT_Msk
+            | LVDSSS_LVDS_LVDS_LOW_PWR_INTR_LVDS_WAKEUP_INTR_SET_LNK1_L3_EXIT_Msk);
+#endif
+       /* Register callbacks with the LVDS driver. */
+        Cy_LVDS_RegisterCallback(LVDSSS_LVDS, &cb, &lvdsContext, &appCtxt);
+
+        Cy_LVDS_Enable(LVDSSS_LVDS);
+        DBG_APP_INFO("SIP enabled\r\n");
+
+#if LINK_TRAINING_EN
+        Cy_LVDS_PhyGpioSet(LVDSSS_LVDS, LINK_READY_CTL_PORT, LINK_READY_CTL_PIN);
+#endif /* LINK_TRAINING_EN */
+
+#if CUSTOM_TRAIN_ENABLE
+        /* Apply the previously identified optimal slave DLL phases. */
+        Cy_LVDS_CustomTraining_ApplyResults(&lvdsContext, portIdx);
+#endif /* CUSTOM_TRAIN_ENABLE */
+
+        #if (!LVCMOS_EN)
+        status = Cy_LVDS_PhyTrainingStart(LVDSSS_LVDS, portIdx, cy_lvds0_config.phyConfig);
+        ASSERT_NON_BLOCK(CY_LVDS_SUCCESS == status, status);
+        #endif /* !LVCMOS_EN */
+
+#if LINK_TRAINING_EN
+        /* Adding a delay here as I2C write from LVDS callback seems to be creating a race condition. */
+        /* Provide delay to execute callback function */
+        vTaskDelay(5);
+        if (glIsLVDSPhyTrainingDone)
+        {
+            i2c_status = Cy_I2C_Write(FPGASLAVE_ADDR,FPGA_PHY_LINK_CONTROL_ADDRESS,glPhyLinkTrainControl,
+                                              FPGA_I2C_ADDRESS_WIDTH,FPGA_I2C_DATA_WIDTH);
+            ASSERT_NON_BLOCK(i2c_status == CY_SCB_I2C_SUCCESS, i2c_status);
+        }
+
+        if(glIsLVDSLink0TrainingDone)
+        {
+            i2c_status = Cy_I2C_Write(FPGASLAVE_ADDR,FPGA_PHY_LINK_CONTROL_ADDRESS,glPhyLinkTrainControl,
+                                          FPGA_I2C_ADDRESS_WIDTH,FPGA_I2C_DATA_WIDTH);
+            ASSERT_NON_BLOCK(i2c_status == CY_SCB_I2C_SUCCESS, i2c_status);
+        }
+
+        if(glIsLVDSLink1TrainingDone)
+        {
+            SET_BIT (glPhyLinkTrainControl, P1_TRAINING_DONE);
+            i2c_status = Cy_I2C_Write(FPGASLAVE_ADDR,FPGA_PHY_LINK_CONTROL_ADDRESS,glPhyLinkTrainControl,
+                                          FPGA_I2C_ADDRESS_WIDTH,FPGA_I2C_DATA_WIDTH);
+            ASSERT_NON_BLOCK(i2c_status == CY_SCB_I2C_SUCCESS, i2c_status);
+        }
+        DBG_APP_INFO("LVDSLink1Training %d LVDSLink0Training %d \r\n",glIsLVDSLink1TrainingDone,glIsLVDSLink0TrainingDone);
 #endif
 
 #if INMD_EN
-    Cy_USBD_AddEvtToLog(&usbdCtxt, CY_USB_EVT_INMD_EN);
-    Cy_LVDS_InitMetadata(LVDSSS_LVDS, 0, 0, 16, mdArray0);
-    DBG_APP_INFO("MetaDataInit - PORT 0\r\n");
+        Cy_USBD_AddEvtToLog(&usbdCtxt, CY_USB_EVT_INMD_EN);
+        Cy_LVDS_InitMetadata(LVDSSS_LVDS, 0, 0, 16, mdArray0);
+        DBG_APP_INFO("MetaDataInit - PORT 0\r\n");
 #endif
 
-#if LVCMOS_EN
-        status = Cy_LVDS_GpifSMStart(LVDSSS_LVDS, 0, 0, 0xC);
-        ASSERT_NON_BLOCK(CY_LVDS_SUCCESS == status, status);
-#else
-        status = Cy_LVDS_GpifSMStart(LVDSSS_LVDS, 0, 0, 0);
-        ASSERT_NON_BLOCK(CY_LVDS_SUCCESS == status, status);
-#endif
-        DBG_APP_INFO("P0_GPIF SM Start\r\n");
-#endif /* End of PORT1_EN */
+        #if THREAD_INTERLEAVE_EN /* Two Thread configuration */
+        status = Cy_LVDS_GpifThreadConfig(LVDSSS_LVDS, thrdIdx,   scktIdx,   0, 0, 1);
+        status = Cy_LVDS_GpifThreadConfig(LVDSSS_LVDS, thrdIdx+1, scktIdx+1, 0, 0, 1);
+        #else /* Single Thread configuration */
+        status = Cy_LVDS_GpifThreadConfig(LVDSSS_LVDS, thrdIdx, scktIdx, 0, 0, 1);
+        #endif
 
-        DBG_APP_INFO("LVDSLink1Training %d LVDSLink0Training %d \r\n",glIsLVDSLink1TrainingDone,glIsLVDSLink0TrainingDone);
-        if (!WL_EN)
-            glIsLVDSLink1TrainingDone = true;
-        if(PORT1_EN)
-            glIsLVDSLink0TrainingDone = true;
-        if (LinkTrainRetry > 0)
-        {
-            LinkTrainRetry--;
-        }
-        else{
-            /* exit the loop after retry count become zero*/
-            vTaskDelay(50);
-            break;
-        }
-    }while (!(glIsLVDSLink1TrainingDone && glIsLVDSLink0TrainingDone));
-/* Stuck at fault counter signal select */
-#if ((!LVCMOS_EN))
-    LVDSSS_LVDS->AFE[0].STUCK_CNTR_SIG_SEL_0 = 0x59585756;
-    LVDSSS_LVDS->AFE[0].STUCK_CNTR_SIG_SEL_1 = 0x5D5C5B5A;
-#endif
-    DBG_APP_INFO("LVDS_Init Done\r\n");
+        status = Cy_LVDS_GpifSMStart(LVDSSS_LVDS, portIdx, 0, 0);
+        ASSERT_NON_BLOCK(CY_LVDS_SUCCESS == status, status);
+        DBG_APP_INFO("GPIF SM_Start\r\n");
+
+            if (!WL_EN)
+                glIsLVDSLink1TrainingDone = true;
+            if(PORT1_EN)
+                glIsLVDSLink0TrainingDone = true;
+            if (LinkTrainRetry > 0)
+            {
+                LinkTrainRetry--;
+            }
+            else{
+                /* exit the loop after retry count become zero*/
+                vTaskDelay(50);
+                break;
+            }
+        } while (!(glIsLVDSLink1TrainingDone && glIsLVDSLink0TrainingDone));
+
+    DBG_APP_INFO("LVDS_LVCMOS_Init Done\r\n");
 } /* End of Cy_LVDS_LVCMOS_Init() */
 
 /******************************************************************************
@@ -985,11 +1161,13 @@ void Cy_USB_EgressDma_ISR(void)
     portYIELD_FROM_ISR(true);
 } /* End of Cy_USB_EgressDma_ISR */
 
-/******************************************************************************
+/*****************************************************************************
  * Function Name: Cy_UVC_DataWire_ISR
  ******************************************************************************
+ *
  * Summary:
- *  Handler for DataWire ISR
+ * Handler for DataWire interrupts associated with DMA transfers into
+ * USB-HS Video Streaming endpoint.
  *
  * Parameters:
  *  None
@@ -999,11 +1177,9 @@ void Cy_USB_EgressDma_ISR(void)
  *****************************************************************************/
 void Cy_UVC_DataWire_ISR (void)
 {
-    /* Clear the interrupt first. */
-    Cy_USB_AppClearDmaInterrupt(&appCtxt, appCtxt.uvcInEpNum, CY_USB_ENDP_DIR_IN);
-
-    /* The current data buffer has been consumed. Move to another buffer if available. */
-    Cy_UVC_AppHandleSendCompletion(&appCtxt);
+    /* Pass the interrupt to the DMA manager. */
+    Cy_HBDma_Mgr_HandleDW1Interrupt(&HBW_MgrCtxt);
+    portYIELD_FROM_ISR(true);
 } /* ENd of Cy_UVC_DataWire_ISR() */
 
 /******************************************************************************
@@ -1130,39 +1306,7 @@ void cy_usb_ConfigureSCBClock (uint8_t Index)
     Cy_SysClk_PeriphAssignDivider((en_clk_dst_t)(PCLK_SCB1_CLOCK), CY_SYSCLK_DIV_8_BIT, Index);
 }
 
-/* CYBSP_UART_SCB_IRQ */
-const cy_stc_sysint_t scb_uart_irq_config = {
-        .intrSrc = (IRQn_Type) scb_1_interrupt_IRQn,
-        .intrPriority = 3u
-};
 
-void fpga_scbInterruptHandler(void)
-{
-    uint32_t writeStatus;
-    uint32_t readStatus;
-    uint32_t RxCount;
-
-    writeStatus = Cy_SCB_GetTxInterruptStatus(FPGA_UART_SCB);
-    Cy_SCB_ClearTxInterrupt(FPGA_UART_SCB, writeStatus);
-    if((writeStatus & CY_SCB_TX_INTR_UART_DONE) != 0)
-    {
-        txDone = 0xFF;
-    }
-
-    readStatus = Cy_SCB_GetRxInterruptStatus(FPGA_UART_SCB);
-    Cy_SCB_ClearRxInterrupt(FPGA_UART_SCB, readStatus);
-
-    if((readStatus & CY_SCB_RX_INTR_NOT_EMPTY) != 0)
-    {
-        RxCount = Cy_SCB_UART_GetNumInRxFifo(FPGA_UART_SCB);
-        for(uint8_t i = 0; i < RxCount; i++)
-        {
-            if (i > (SCB1_RXBUF_SIZE-1)) //check buffer full
-                i = 0; //do not overflow
-            scb_rx_buffer[i] = Cy_SCB_ReadRxFifo(FPGA_UART_SCB);
-        }
-    }
-}
 
 /******************************************************************************
  * Function Name: cy_usb_InitUart
@@ -1188,14 +1332,14 @@ void cy_usb_InitUart (uint8_t scbIndex)
     CY_ASSERT_L1(scbIndex <= 1);
 
     cy_usb_ConfigureSCBClock (SCB1_CLOCK_INDEX);
-
     memset((void *)&pinCfg, 0, sizeof(pinCfg));
+    memset((void *)&uartCfg, 0, sizeof(uartCfg));
 
     /* Configure the UART pins:
      * UART_TX as Strong Drive output.
      * UART_RX as input pin with output driver tri-stated.
      */
-    if (scbIndex == FPGA_UART_SCB_IDX) {
+    if (scbIndex == LOGGING_SCB_IDX) {
         pinCfg.driveMode = CY_GPIO_DM_STRONG_IN_OFF;
         pinCfg.hsiom     = UART_TX_HSIOM;
         Cy_GPIO_Pin_Init(UART_TX_PORT, UART_TX_PIN, &pinCfg);
@@ -1203,14 +1347,12 @@ void cy_usb_InitUart (uint8_t scbIndex)
         pinCfg.driveMode = CY_GPIO_DM_HIGHZ;
         Cy_GPIO_Pin_Init(UART_RX_PORT, UART_RX_PIN, &pinCfg);
 
-        pSCB = FPGA_UART_SCB;
+        pSCB = LOGGING_SCB;
     }
     else {
-        DBG_APP_INFO("Wronng SCB index\r\n");
+        DBG_APP_INFO("Wrong SCB index\r\n");
         return;
     }
-
-    memset((void *)&uartCfg, 0, sizeof(uartCfg));
     /* Divide 1.xx MHz clock by 10 to get baud rate of ~115200. */
     uartCfg.oversample          = 9;
     uartCfg.uartMode            = CY_SCB_UART_STANDARD;
@@ -1230,43 +1372,9 @@ void cy_usb_InitUart (uint8_t scbIndex)
 
     /* Configure and enable the SCB block as UART. */
     Cy_SCB_UART_Init(pSCB, &uartCfg, &gUartCtxt);
-
-    // Cy_SCB_SetTxInterruptMask(pSCB,CY_SCB_TX_INTR_UART_DONE);
-    // Cy_SCB_SetRxInterruptMask(pSCB,CY_SCB_RX_INTR_NOT_EMPTY);
-     
-    /*  Enable interrupt and UART block */
-    // Cy_SysInt_Init(&scb_uart_irq_config, fpga_scbInterruptHandler);
-    // NVIC_EnableIRQ((IRQn_Type) scb_uart_irq_config.intrSrc);
     Cy_SCB_UART_Enable(pSCB);
 } /* End of cy_usb_InitUart() */
 
-/******************************************************************************
- * Function Name: fpga_scbTx(uint8_t *tx_buf, uint8_t len)
- ******************************************************************************
- * Summary
- *  Function to transmit data over UART (SCB1) Tx pin
- *
- * Parameters:
- * \param tx_buf
- *  Character pointer, pointing to buffer containing data to transmit
- *
- * \param len
- *  Length of the data to transmit
- *
- * Return:
- *  void
- *****************************************************************************/
-void fpga_scbTx(uint8_t *tx_buf, uint8_t len)
-{
-    txDone = 0x0;
-    for(int i = 0; i<len; i++)
-    {
-       // Cy_Debug_AddToLog(1, "\n\rtx_buf = %d\n\r",*tx_buf);
-        Cy_SCB_WriteTxFifo (FPGA_UART_SCB, (uint32_t)*tx_buf);
-        tx_buf++;
-        while(txDone == 0x0);
-    }
-} /* End of fpga_scbTx() */
 
 /******************************************************************************
  * Function Name: Cy_USB_USBSSInit (void)
@@ -1307,7 +1415,7 @@ void Cy_USB_USBSSInit (void)
 
     memset((void *)&pinCfg, 0, sizeof(pinCfg));
     /* Configure c_reset FPGA GPIO. */
-    pinCfg.driveMode = CY_GPIO_DM_STRONG_IN_OFF;//CY_GPIO_DM_STRONG_IN_OFF;
+    pinCfg.driveMode = CY_GPIO_DM_STRONG_IN_OFF;
     pinCfg.hsiom     = TI180_CRESET_GPIO;
     Cy_GPIO_Pin_Init(TI180_CRESET_GPIO_PORT, TI180_CRESET_GPIO_PIN, &pinCfg);
     Cy_GPIO_Clr(TI180_CRESET_GPIO_PORT, TI180_CRESET_GPIO_PIN);
@@ -1439,6 +1547,18 @@ void Cy_USB_USBSSInit (void)
     Cy_SysInt_Init(&intrCfg, Cy_USB_HS_ISR);
     NVIC_EnableIRQ(intrCfg.intrSrc);
 
+    /* Register ISR for and enable USBHS Interrupt. */
+#if CY_CPU_CORTEX_M4
+    intrCfg.intrSrc      = usbhsdev_interrupt_u2d_dpslp_o_IRQn;
+    intrCfg.intrPriority = 4;
+#else
+    intrCfg.cm0pSrc      = usbhsdev_interrupt_u2d_dpslp_o_IRQn;
+    intrCfg.intrSrc      = NvicMux5_IRQn;
+    intrCfg.intrPriority = 2;
+#endif /* CY_CPU_CORTEX_M4 */
+    Cy_SysInt_Init(&intrCfg, Cy_USB_HS_ISR);
+    NVIC_EnableIRQ(intrCfg.intrSrc);
+
     /* Register ISR for LVDS LPM */
     intrCfg.intrSrc      = lvds2usb32ss_lvds_wakeup_int_o_IRQn;
     intrCfg.intrPriority = 0;
@@ -1545,6 +1665,9 @@ bool Cy_InitHbDma(void)
     /* Both LVDS DMA adapters are used only for ingress transfers. */
     Cy_HBDma_Mgr_SetLvdsAdapterIngressMode(&HBW_MgrCtxt, true, true);
 
+    /* Register the USB stack context with the HBW DMA manager. */
+    Cy_HBDma_Mgr_RegisterUsbContext(&HBW_MgrCtxt, &usbdCtxt);
+
     return true;
 } /* End of Cy_InitHbDma */
 
@@ -1589,61 +1712,6 @@ void Cy_USBSS_DeInit(cy_stc_usbss_cal_ctxt_t *pCalCtxt)
 } /* End of Cy_USBSS_DeInit() */
 
 /******************************************************************************
- * Function Name: Cy_USB_DisableUsbBlock(void)
- ******************************************************************************
- * Summary:
- *  Function to disable the USB32DEV IP block after terminating current
- *  connection.
- *
- * Parameters:
- *  None
- *
- * Return:
- *  None
- *****************************************************************************/
-void Cy_USB_DisableUsbBlock (void)
-{
-    /* Disable the USB32DEV IP. */
-    USB32DEV->USB32DEV_MAIN.CTRL &= ~USB32DEV_MAIN_CTRL_IP_ENABLED_Msk;
-
-    /* Disable HBDMA adapter interrupts and the adapter itself. */
-    NVIC_DisableIRQ(lvds2usb32ss_usb32_ingrs_dma_int_o_IRQn);
-    NVIC_DisableIRQ(lvds2usb32ss_usb32_egrs_dma_int_o_IRQn);
-    Cy_HBDma_DeInit(&HBW_DrvCtxt);
-
-    DBG_APP_TRACE("Disabled HBWSS DMA adapters\r\n");
-} /* End of Cy_USB_DisableUsbBlock() */
-
-/******************************************************************************
- * Function Name: Cy_USB_EnableUsbBlock(void)
- ******************************************************************************
- * Summary:
- *  Function to enable the USB32DEV IP block before enabling a new USB
- *  connection.
- *
- * Parameters:
- *  None
- *
- * Return:
- *  None
- *****************************************************************************/
-void Cy_USB_EnableUsbBlock (void)
-{
-    /* Enable the USB DMA adapters and respective interrupts. */
-    Cy_HBDma_Init(NULL, USB32DEV, &HBW_DrvCtxt, 0, 0);
-
-    NVIC_EnableIRQ(lvds2usb32ss_usb32_ingrs_dma_int_o_IRQn);
-    NVIC_EnableIRQ(lvds2usb32ss_usb32_egrs_dma_int_o_IRQn);
-
-#if USBSS_GEN2_ENABLE
-    USB32DEV->USB32DEV_PROT.PROT_SUBLINK_LSM = 0x000A000A;
-#endif /* USBSS_GEN2_ENABLE */
-
-    /* Make sure to enable USB32DEV IP. */
-    USB32DEV->USB32DEV_MAIN.CTRL |= USB32DEV_MAIN_CTRL_IP_ENABLED_Msk;
-} /* End of Cy_USB_EnableUsbBlock() */
-
-/******************************************************************************
  * Function Name: Cy_USB_SSConnectionEnable(cy_stc_usb_app_ctxt_t *pAppCtxt)
  ******************************************************************************
  * Summary
@@ -1659,10 +1727,10 @@ void Cy_USB_EnableUsbBlock (void)
 bool Cy_USB_SSConnectionEnable (cy_stc_usb_app_ctxt_t *pAppCtxt)
 {
     pAppCtxt->desiredSpeed = USB_CONN_TYPE;
+    LOG_COLOR("Trying to connect with USB Speed %d\r\n", pAppCtxt->desiredSpeed);
     Cy_USBD_ConnectDevice(pAppCtxt->pUsbdCtxt, pAppCtxt->desiredSpeed);
     pAppCtxt->usbConnected = true;
-    LOG_COLOR("USB Speed %d \n\r",pAppCtxt->desiredSpeed);
-    return true;
+
 #if FORCE_USBHS
     DBG_APP_INFO("USB_DEV_HS\r\n");
     Cy_USBD_ConnectDevice(pAppCtxt->pUsbdCtxt, CY_USBD_USB_DEV_HS);
@@ -1678,7 +1746,7 @@ bool Cy_USB_SSConnectionEnable (cy_stc_usb_app_ctxt_t *pAppCtxt)
  * Summary
  *  PSVP specific USB disconnect function.
  *
- * Parameters: 
+ * Parameters:
  *  \param pAppCtxt
  *  Pointer to application context structure.
  *
@@ -1738,7 +1806,7 @@ int main (void)
 #if DEBUG_INFRA_EN
 #if !USBFS_LOGS_ENABLE
     /* Initialize the UART for logging. */
-    cy_usb_InitUart(LOGGING_SCB_IDX); //reconfigure scb1 with different PINs
+    cy_usb_InitUart(LOGGING_SCB_IDX); /* Configure SCB for debug print*/
 #endif /* USBFS_LOGS_ENABLE */
     Cy_Debug_LogInit(&dbgCfg);
 

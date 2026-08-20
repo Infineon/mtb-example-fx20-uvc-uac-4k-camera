@@ -7,7 +7,7 @@
 #
 ################################################################################
 # \copyright
-# Copyright (2025), Cypress Semiconductor Corporation (an Infineon company)
+# Copyright (2026), Cypress Semiconductor Corporation (an Infineon company)
 # SPDX-License-Identifier: Apache-2.0
 # 
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -52,6 +52,7 @@ APPNAME=mtb-example-fx20-uvc-uac-4k-camera
 #
 # GCC_ARM -- GCC is available as part of ModusToolbox Setup program
 # ARM     -- ARM Clang Compiler (must be installed separately)
+# IAR     -- IAR Embedded Development Tools (must be installed separately)
 #
 # To use the ARM toolchain, ensure the CY_COMPILER_ARM_DIR environment variable is set to the compiler's directory (absolute path).
 # For example, the default path for ARMCLANG from a Keil installation is typically C:/Keil_v5/ARM/ARMCLANG.
@@ -122,9 +123,12 @@ DEFINES= \
         BCLK__BUS_CLK__HZ=75000000 \
         DEBUG_INFRA_EN=1 \
         FREERTOS_ENABLE=1 \
-        USB3_LPM_ENABLE=0 \
+        USB3_LPM_ENABLE=1 \
         USBFS_LOGS_ENABLE=1 \
-        FPGA_ENABLE=1
+        FPGA_ENABLE=1 \
+		CUSTOM_TRAIN_ENABLE=1 \
+		DEEPSLEEP_EN=1\
+		LVDS_LOW_POWER_EN=1
 
 # Select the default USB connection speed from amongst:
 # CY_USBD_USB_DEV_SS_GEN2X2, CY_USBD_USB_DEV_SS_GEN2, CY_USBD_USB_DEV_SS_GEN1X2,
@@ -138,7 +142,7 @@ DEFINES += LVCMOS_EN=0
 DEFINES += LVCMOS_DDR_EN=0
 
 # Set to 1 for Sony_Imx715
-DEFINES += SONY_IMX715_EN=1
+DEFINES += SONY_IMX715_EN=0
 # Set to 1 for ThineSensor
 DEFINES += THINE_EN=0
 
@@ -161,7 +165,7 @@ DEFINES += CY_VENDOR_IF_EN=0
 DEFINES += CDC_INTERFACE_EN=0
 
 # Set to 1 to enable Audio I/F. Default stereo is enabled
-DEFINES += AUDIO_IF_EN=1
+DEFINES += AUDIO_IF_EN=0
 
 # Set to 1 to restrict USB connection to USBHS.
 DEFINES += FORCE_USBHS=0
@@ -174,6 +178,8 @@ endif
 # Select softfp or hardfp floating point. Default is softfp.
 ifeq ($(CORE), CM4)
     ifeq ($(TOOLCHAIN), GCC_ARM)
+        VFP_SELECT= softfp
+    else ifeq ($(TOOLCHAIN), IAR)
         VFP_SELECT= softfp
     else ifeq ($(TOOLCHAIN), ARM)
         VFP_SELECT= soft
@@ -192,6 +198,8 @@ ifeq ($(CORE), CM4)
     else ifeq ($(TOOLCHAIN), ARM)
         CFLAGS= -Os -Og -mcpu=Cortex-M4 -mfpu=fpv4-sp-d16 -mthumb -ffunction-sections -fdata-sections -g \
                 --target=arm-arm-none-eabi -fno-rtti -fno-exceptions -Wno-error -fshort-wchar -fshort-enums
+    else ifeq ($(TOOLCHAIN), IAR)
+        CFLAGS= --diag_suppress Pe111
     endif
 else ifeq ($(CORE), CM0P)
     ifeq ($(TOOLCHAIN), GCC_ARM)
@@ -199,6 +207,8 @@ else ifeq ($(CORE), CM0P)
     else ifeq ($(TOOLCHAIN), ARM)
         CFLAGS= -Os -Og -mcpu=Cortex-M0plus -mthumb -ffunction-sections -fdata-sections -g \
                 --target=arm-arm-none-eabi -fno-rtti -fno-exceptions -Wno-error -fshort-wchar -fshort-enums
+    else ifeq ($(TOOLCHAIN), IAR)
+        CFLAGS= --diag_suppress Pe111
     endif
 endif
 
@@ -220,12 +230,16 @@ ifeq ($(CORE), CM4)
         LDFLAGS=-Wl,--start-group -mcpu=cortex-m4 -mthumb --entry=Reset_Handler -Wl,--gc-sections -g -ffunction-sections -finline-functions -Os -Wl,--end-group
     else ifeq ($(TOOLCHAIN), ARM)
         LDFLAGS=--cpu=Cortex-M4 --entry=Reset_Handler --diag_suppress=L6329W,L6314W 
+    else ifeq ($(TOOLCHAIN), IAR)
+        LDFLAGS=--cpu Cortex-M4 --fpu FPv4-SP --manual_dynamic_initialization --entry Reset_Handler
     endif
 else ifeq ($(CORE), CM0P)
     ifeq ($(TOOLCHAIN), GCC_ARM)
         LDFLAGS=-Wl,--start-group -mcpu=cortex-m0plus -mthumb --entry=Reset_Handler -Wl,--gc-sections -g -ffunction-sections -finline-functions -Os -Wl,--end-group
     else ifeq ($(TOOLCHAIN), ARM)
         LDFLAGS=--cpu=Cortex-M0plus --entry=Reset_Handler --diag_suppress=L6329W,L6314W
+    else ifeq ($(TOOLCHAIN), IAR)
+        LDFLAGS=--cpu Cortex-M0+ --manual_dynamic_initialization --entry Reset_Handler
     endif
 endif
 
@@ -246,18 +260,42 @@ endif
 ifeq ($(CORE), CM4)
     ifeq ($(BLENABLE), yes)
         # Use loadable linker script for CM4 core
-        LINKER_SCRIPT = $(if $(filter GCC_ARM,$(TOOLCHAIN)),$(LDPATH)/fx_cm4_loadable.ld,$(LDPATH)/fx_cm4_loadable.sct)
+        ifeq ($(TOOLCHAIN), GCC_ARM)
+            LINKER_SCRIPT = $(LDPATH)/fx_cm4_loadable.ld
+        else ifeq ($(TOOLCHAIN), ARM)
+            LINKER_SCRIPT = $(LDPATH)/fx_cm4_loadable.sct
+        else ifeq ($(TOOLCHAIN), IAR)
+            LINKER_SCRIPT = $(LDPATH)/fx_cm4_loadable.icf
+        endif
     else
         # Use dual linker script for CM4 core
-        LINKER_SCRIPT = $(if $(filter GCC_ARM,$(TOOLCHAIN)),$(LDPATH)/fx_cm4.ld,$(LDPATH)/fx_cm4_dual.sct)
+        ifeq ($(TOOLCHAIN), GCC_ARM)
+            LINKER_SCRIPT = $(LDPATH)/fx_cm4.ld
+        else ifeq ($(TOOLCHAIN), ARM)
+            LINKER_SCRIPT = $(LDPATH)/fx_cm4_dual.sct
+        else ifeq ($(TOOLCHAIN), IAR)
+            LINKER_SCRIPT = $(LDPATH)/fx_cm4_dual.icf
+        endif
     endif
 else ifeq ($(CORE),CM0P)
     ifeq ($(BLENABLE), yes)
         # Use loadable linker script for CM0P core
-        LINKER_SCRIPT = $(if $(filter GCC_ARM,$(TOOLCHAIN)),$(LDPATH)/fx_cm0plus_loadable.ld,$(LDPATH)/fx_cm0plus_loadable.sct)
+        ifeq ($(TOOLCHAIN), GCC_ARM)
+            LINKER_SCRIPT = $(LDPATH)/fx_cm0plus_loadable.ld
+        else ifeq ($(TOOLCHAIN), ARM)
+            LINKER_SCRIPT = $(LDPATH)/fx_cm0plus_loadable.sct
+        else ifeq ($(TOOLCHAIN), IAR)
+            LINKER_SCRIPT = $(LDPATH)/fx_cm0plus_loadable.icf
+        endif
     else
         # Use linker script for CM0P core
-        LINKER_SCRIPT = $(if $(filter GCC_ARM,$(TOOLCHAIN)),$(LDPATH)/fx_cm0plus.ld,$(LDPATH)/fx_cm0plus.sct)
+        ifeq ($(TOOLCHAIN), GCC_ARM)
+            LINKER_SCRIPT = $(LDPATH)/fx_cm0plus.ld
+        else ifeq ($(TOOLCHAIN), ARM)
+            LINKER_SCRIPT = $(LDPATH)/fx_cm0plus.sct
+        else ifeq ($(TOOLCHAIN), IAR)
+            LINKER_SCRIPT = $(LDPATH)/fx_cm0plus.icf
+        endif
     endif
 endif
 
@@ -273,10 +311,13 @@ ifeq ($(BLENABLE), yes)
 else
     ifeq ($(TOOLCHAIN), GCC_ARM)
         POSTBUILD=\
-            $(OBJCOPY) -O ihex build/$(TARGET)/$(CONFIG)/$(APPNAME).elf build/$(TARGET)/$(CONFIG)/$(APPNAME).hex
+	        $(OBJCOPY) -O ihex build/$(TARGET)/$(CONFIG)/$(APPNAME).elf build/$(TARGET)/$(CONFIG)/$(APPNAME).hex
+    else ifeq ($(TOOLCHAIN), IAR)
+        POSTBUILD=\
+	        $(OBJCOPY) -O ihex build/$(TARGET)/$(CONFIG)/$(APPNAME).elf build/$(TARGET)/$(CONFIG)/$(APPNAME).hex
     else ifeq ($(TOOLCHAIN), ARM)
         POSTBUILD=\
-            $(FROMELF) --i32combined --base=0x10000000 -o build/$(TARGET)/$(CONFIG)/$(APPNAME).hex build/$(TARGET)/$(CONFIG)/$(APPNAME).elf
+	        $(FROMELF) --i32combined --base=0x10000000 -o build/$(TARGET)/$(CONFIG)/$(APPNAME).hex build/$(TARGET)/$(CONFIG)/$(APPNAME).elf
     endif
 endif
 

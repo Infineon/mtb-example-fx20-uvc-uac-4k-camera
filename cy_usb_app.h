@@ -36,14 +36,41 @@ extern "C" {
 #endif
 
 /* UVC frame with partial buffer size */
-#define PARTIAL_FRAME_EN               (0)
+/* Set this Macro to (0) when streaming in Linux. This flag does not effect in Auto DMA mode */
+#define PARTIAL_FRAME_EN               (0) /* Default value = 0 */
 
 /* Macro for HW Board Selection */
 #define FX20_Ti180                     (1)
 
 #if WL_EN && PORT1_EN
 /* can not use Port1 along with Wide Link */
-#error LOG_COLOR(RED, "SELECT PROPER MODE \n\r");
+#error "INVALID: WL_EN requires PORT1_EN to be 0"
+#endif
+
+#if LVCMOS_EN && CUSTOM_TRAIN_ENABLE
+/* Firmware based PHY training is not needed for LVCMOS mode */
+#error "INVALID: LVCMOS_EN requires CUSTOM_TRAIN_ENABLE to be 0"
+#endif
+
+#if LVCMOS_EN && (!LVCMOS_DDR_EN) && LVDS_LOW_POWER_EN
+/* FPGA V70 does not support Low power mode in LVCMOS mode */
+#error "INVALID: LVDS_LOW_POWER_EN can't be used in LVCMOS SDR mode. Set LVDS_LOW_POWER_EN=0"
+#endif
+
+#if !LVCMOS_EN && DEEPSLEEP_EN && !LVDS_LOW_POWER_EN
+#error "INVALID: DEEPSLEEP_EN requires LVDS_LOW_POWER_EN=1 to reduce the power consumption \
+and re-training the LVDS block"
+#endif
+
+#if DEEPSLEEP_EN && LVCMOS_EN && LVCMOS_DDR_EN && !WL_EN && LVDS_LOW_POWER_EN
+/* Training is needed LVCMOS DDR WL mode when CPU and LVDS/LVCMOS
+ block enters into low power mode */
+#error "INVALID: DEEPSLEEP_EN requires LVCMOS_EN=0 or LVCMOS_DDR_EN=1 and WL_EN=1"
+#endif
+
+#if DEEPSLEEP_EN && LVCMOS_EN && LVCMOS_DDR_EN && WL_EN && !LVDS_LOW_POWER_EN
+/* LVDS_LOW_POWER_EN should set where training is needed (LVDS, LVCMOS DDR WL) */
+#error "INVALID: DEEPSLEEP_EN requires LVCMOS_EN=0 or LVCMOS_DDR_EN=1 and WL_EN=1 and LVDS_LOW_POWER_EN=1"
 #endif
 
 #if SONY_IMX715_EN && THINE_EN
@@ -81,7 +108,7 @@ typedef enum cy_en_fpgaConfigMode_t
 #if FX20_Ti180 /* Ti180 DVK support LVCMOS DDR/SDR, LVDS modes */
 
     #if (LVCMOS_EN && ((!LVCMOS_DDR_EN) || (!WL_EN)))
-    /* Link training is not needed for LVCMOS SDR and LVCMOS DDR NL modes */
+    /* LINK training is not needed for LVCMOS SDR and LVCMOS DDR NL modes */
     #define LINK_TRAINING_EN           (0)
     #else
     /* Link Training is needed for LVCMOS DDR WL and LVDS modes */
@@ -90,8 +117,6 @@ typedef enum cy_en_fpgaConfigMode_t
 
     #define FPGA_CONFIG_MODE           (PASSIVE_SERIAL_MODE)
 #endif
-
-#define FX10_Ti180_KIT_PASSIVE_SER_WIDTH (PASSIVE_x4)
 
 #if (FPGA_CONFIG_MODE == PASSIVE_SERIAL_MODE)
 /*
@@ -105,7 +130,7 @@ typedef enum cy_en_fpgaConfigMode_t
  * Then FX20 will release control of the SPI pins (High-Z) and make CDONE also
  * High-Z to allow FPGA to enter user mode and proceed to SoC boot.
  *
- * Choose CONFIG_CDONE_AS_INPUT=0 for suppporting FPGA implementations with SoC (CIS_ISP).
+ * Choose CONFIG_CDONE_AS_INPUT=0 for supporting FPGA implementations with SoC (CIS_ISP).
  * Choose CONFIG_CDONE_AS_INPUT=1 for only FPGA bin files.
 */
 #define EFINIX_FPGA_SOC_MERGED_FILE_SIZE (3756522)
@@ -138,7 +163,8 @@ typedef enum cy_en_fpgaConfigMode_t
 #define TI180_CDONE_GPIO_PORT          (P4_4_PORT)
 #define TI180_CDONE_GPIO_PIN           (P4_4_PIN)
 
-/* P13.0 is used for User PMODE functionality. */
+/* P13.0 is a PMODE functionality in bootMode,
+   however application firmware can reconfigure. */
 #define PMODE_GPIO                     (P13_0_GPIO)
 #define PMODE_PORT                     (P13_0_PORT)
 #define PMODE_PIN                      (P13_0_PIN)
@@ -160,21 +186,6 @@ typedef enum cy_en_fpgaConfigMode_t
 
 #define DELAY_MICRO(us)                Cy_SysLib_DelayUs(us)
 #define DELAY_MILLI(ms)                Cy_SysLib_Delay(ms)
-
-/* Loopback program color bands */
-#define BAND1_COLOR_YUYV               (0x80ff80ff)    // White
-#define BAND2_COLOR_YUYV               (0x94ff00ff)    // Yellow
-#define BAND3_COLOR_YUYV               (0x1ac8bfc8)    // Blue
-#define BAND4_COLOR_YUYV               (0x4aca55ca)    // Green
-#define BAND5_COLOR_YUYV               (0xf3969f96)    // Pink
-#define BAND6_COLOR_YUYV               (0xff4c544c)    // Red
-#define BAND7_COLOR_YUYV               (0x9e40d340)    // Violet
-#define BAND8_COLOR_YUYV               (0x80008000)    // Black
-#define COLORBAR_BAND_COUNT_4K         (120)
-#define COLORBAR_BAND_COUNT_1080P      (60)
-#define COLORBAR_BAND_COUNT_720P       (40)
-#define COLORBAR_BAND_COUNT_480P       (20)
-#define LOOPBACK_MEM_BUF_SIZE          (0xF0C0)
 
 #define ASSERT(condition, value) Cy_CheckStatus(__func__, __LINE__, condition, value, true);
 #define ASSERT_NON_BLOCK(condition, value) Cy_CheckStatus(__func__, __LINE__, condition, value, false);
@@ -241,22 +252,18 @@ extern uint8_t glOsString[];
 extern uint8_t glOsCompatibilityId[];
 extern uint8_t glOsFeature[];
 
-
 /* P4.0 is used for VBus detect functionality. */
 #define VBUS_DETECT_GPIO_PORT          (P4_0_PORT)
 #define VBUS_DETECT_GPIO_PIN           (P4_0_PIN)
 #define VBUS_DETECT_GPIO_INTR          (ioss_interrupts_gpio_dpslp_4_IRQn)
 #define VBUS_DETECT_STATE              (0u)
 
-
-#define HDMI_DELAY_SETTING             (0xDD)
-
 /* Number of buffers used for PDM data transfer. */
 #define PDM_APP_BUFFER_CNT             (12u)
 
 /* Refer FX20 Architecture TRM to know supported PHY Training pattern bytes*/
 #define PHY_TRAINING_PATTERN_BYTE      (0x9C)
-#define LINK_TRAINING_PATTERN_BYTE     (0x125A4B78) // Working all the time with 100u phy train interval
+#define LINK_TRAINING_PATTERN_BYTE     (0x125A4B78)
 
 /* USBD layer return code shared between USBD layer and Application layer. */
 typedef enum cy_en_usb_app_ret_code_ {
@@ -279,9 +286,10 @@ typedef enum cy_en_fpga_i2c_reg_map_
     FPGA_UVC_U3V_SELECTION_ADDRESS         = 0x01,
     FPGA_UVC_ENABLE                        = 1,
     FPGA_U3V_ENABLE                        = 0,
+    FPGA_FX20_USBHS_ENABLE                 = 0x80,
 
     FPGA_UVC_HEADER_CTRL_ADDRESS           = 0x02,
-    FPGA_UVC_HEADER_DISABLE                = 0x00, // FX10 will add UVC Header
+    FPGA_UVC_HEADER_DISABLE                = 0x00, /* FX10 will add UVC Header */
     FPGA_UVC_HEADER_ENABLE                 = 0x01,
     FPGA_INMD_UVC_HEADER_ENABLE            = 0x02,
 
@@ -292,29 +300,39 @@ typedef enum cy_en_fpga_i2c_reg_map_
     FPGA_LVDS_LINK_TRAINING_BLK_P1_ADDRESS = 0x05,
     FPGA_LVDS_LINK_TRAINING_BLK_P2_ADDRESS = 0x06,
     FPGA_LVDS_LINK_TRAINING_BLK_P3_ADDRESS = 0x07,
-    
+
     FPGA_ACTIVE_DIVICE_MASK_ADDRESS        = 0x08,
 
     FPGA_LOW_PWR_MODE_ADDRESS              = 0x09,
-    LVDS_L3_MODE_ENTER                     = 0x01,
-    
+    LVDS_EXIT_LOWPOWER_MODE                = 0x00, /* Clear all bits to exit low power mode */
+    LVDS_L1_MODE_ENTER                     = 0x01, /* Bit 0 to enter L0 mode */
+    LVDS_L3_MODE_ENTER                     = 0x02, /* Bit 1 to enter L3 mode */
+
+
     FPGA_PHY_LINK_CONTROL_ADDRESS          = 0x0A,
     FPGA_TRAINING_DISABLE                  = 0x00,
-    FPGA_PHY_CONTROL                       = 0x01, // PHY Training is required
-    FPGA_LINK_CONTROL                      = 0x02, //  Link Training is required
-
-    P0_TRAINING_DONE                       = 0X40, // Port 0 training is completed
-    P1_TRAINING_DONE                       = 0X80, // Port 1 training is completed
+    FPGA_PHY_CONTROL                       = 0x01, /* PHY Training is required */
+    FPGA_LINK_CONTROL                      = 0x02, /* Link Training is required */
+    PHY_TRAINING_DONE                      = 0X20, /* PHY training is completed */
+    P0_TRAINING_DONE                       = 0X40, /* Port 0 training is completed*/
+    P1_TRAINING_DONE                       = 0X80, /* Port 1 training is completed */
 
     FPGA_EXT_CONTROLLER_STATUS_ADDRESS     = 0X0B,
-    DMA_READY_STATUS                       = 0x01, // DMA Ready flag status
-    DDR_CONFIG_STATUS                      = 0x02, // DDR configuration status
-    DDR_BUSY_STATUS                        = 0x04, // DDR Controller busy status
-    DDR_CMD_QUEUE_FULL_STATUS              = 0x08, // Command queue full status
-    DATPATH_IDLE_STATUS                    = 0x10, // Datapath is idle or not
+    DMA_READY_STATUS                       = 0x01, /* DMA Ready flag status */
+    DDR_CONFIG_STATUS                      = 0x02, /* DDR configuration status */
+    DDR_BUSY_STATUS                        = 0x04, /* DDR Controller busy status */
+    DDR_CMD_QUEUE_FULL_STATUS              = 0x08, /* Command queue full status */
+    DATPATH_IDLE_STATUS                    = 0x10, /* Datapath is idle or not */
 
+    FPGA_RESERVED_ADDRESS                  = 0X0C,
+
+    FPGA_LVDS_GEAR_RATIO_ADDRESS           = 0X0D,
+    GEAR_RATIO_DEFLT_2_1                   = 0x00,
+    GEAR_RATIO_2_1                         = 0x02,
+    GEAR_RATIO_4_1                         = 0x04,
+    GEAR_RATIO_8_1                         = 0x08,
     /* Device related Info start */
-    /* Device ofset address */
+    /* Device offset address */
     DEVICE0_OFFSET                         = 0x20,
     DEVICE1_OFFSET                         = 0x3C,
     DEVICE2_OFFSET                         = 0x58,
@@ -341,7 +359,7 @@ typedef enum cy_en_fpga_i2c_reg_map_
     DEVICE_IMAGE_HEIGHT_MSB_ADDRESS        = 0x03,
     DEVICE_IMAGE_WIDTH_LSB_ADDRESS         = 0x04,
     DEVICE_IMAGE_WIDTH_MSB_ADDRESS         = 0x05,
-    
+
     DEVICE_FPS_ADDRESS                     = 0x06,
 
     DEVICE_PIXEL_WIDTH_ADDRESS             = 0x07,
@@ -357,22 +375,22 @@ typedef enum cy_en_fpga_i2c_reg_map_
     MIPI_SOURCE                            = 0x02,
 
     DEVICE_FLAG_STATUS_ADDRESS             = 0x09,
-    SLAVE_FIFO_ALMOST_EMPTY                = 0x01, // Slave FIFO almost empty status
-    INTER_MED_FIFO_EMPTY                   = 0x02, // Intermediate FIFO empty status
-    INTER_MED_FIFO_FULL                    = 0x04, // Intermediate FIFO full status
-    DDR_FULL_FRAME_WRITE_COMPLETE          = 0x10, // DDR write status (Full frame write complete)
-    DDR_FULL_FRAME_READ_COMPLETE           = 0x20, // DDR write status (Full frame read complete)
+    SLAVE_FIFO_ALMOST_EMPTY                = 0x01, /* Slave FIFO almost empty status */
+    INTER_MED_FIFO_EMPTY                   = 0x02, /* Intermediate FIFO empty status */
+    INTER_MED_FIFO_FULL                    = 0x04, /* Intermediate FIFO full status */
+    DDR_FULL_FRAME_WRITE_COMPLETE          = 0x10, /* DDR write status (Full frame write complete) */
+    DDR_FULL_FRAME_READ_COMPLETE           = 0x20, /* DDR write status (Full frame read complete) */
 
     DEVICE_MIPI_STATUS_ADDRESS             = 0x0A,
 
-    DEVICE_HDMI_SOURCE_INFO_ADDRESS        = 0x0B, // Read before write
-    HDMI_DISCONECT                         = 0x00, // Bit 0- Source connection status
-    THIN_MIPI                              = 0x00, // Bit 0-
-    HDMI_CONNECT                           = 0x01, // Bit 0- Source connection status
-    HDMI_DUAL_CH                           = 0x02, // Bit 1- 0 for single channel and 1 for dual channel
-    HDMI_COLOR_FORMAT_YUV444               = 0x04, // Bit 2- 0 for YUV 422 mode and 1 for YUV 444 mode
-    SONY_CIS                               = 0x10, // Bit 4- Enable CIS ISP IP (Valid for only MIPI source)
-    SONY_MIPI                              = 0x20, // Bit 5- Enable Crop Algorithm (Valid for only MIPI source)
+    DEVICE_HDMI_SOURCE_INFO_ADDRESS        = 0x0B, /* Read before write */
+    HDMI_DISCONECT                         = 0x00, /* Bit 0- Source connection status */
+    THIN_MIPI                              = 0x00, /* Bit 0- */
+    HDMI_CONNECT                           = 0x01, /* Bit 0- Source connection status */
+    HDMI_DUAL_CH                           = 0x02, /* Bit 1- 0 for single channel and 1 for dual channel */
+    HDMI_COLOR_FORMAT_YUV444               = 0x04, /* Bit 2- 0 for YUV 422 mode and 1 for YUV 444 mode */
+    SONY_CIS                               = 0x10, /* Bit 4- Enable CIS ISP IP (Valid for only MIPI source) */
+    SONY_MIPI                              = 0x20, /* Bit 5- Enable Crop Algorithm (Valid for only MIPI source) */
 
     DEVICE_U3V_STREAM_MODE_ADDRESS         = 0x0C,
     DEVICE_U3V_CHUNK_MODE_ADDRESS          = 0x0D,
@@ -425,9 +443,9 @@ struct cy_stc_usb_app_ctxt_
 
     /* UVC specific fields. */
     uint8_t uvcInEpNum;                         /* Index of UVC streaming endpoint. */
-    uint8_t uvcPendingBufCnt;                   /* Number of data buffers which are pending to be streamed. */
-    bool    uvcFlowCtrlFlag;                    /* Flag indicating that UVC channel is in flow control. */
 
+    bool isLpmEnabled;                          /** Whether LPM transitions are enabled. */
+    uint32_t lpmEnableTime;                     /** Timestamp at which LPM should be re-enabled. */
     /* Global Task handles */
     TaskHandle_t uvcDevicetaskHandle;           /* UVC application task. */
     QueueHandle_t uvcMsgQueue;                  /* Message queue used to send messages to the UVC task. */
@@ -437,14 +455,17 @@ struct cy_stc_usb_app_ctxt_
     bool vbusPresent;                           /* VBus presence indicator flag. */
     bool usbConnected;                          /* Whether USB connection is enabled. */
     bool usbFsPortActive;
-    bool startupMessagesDone;
+    bool printStartupMessage;
+    bool port1Enabled;
     uint8_t glfpga_status;
     volatile uint8_t glPrintFlag;
 
     TimerHandle_t vbusDebounceTimer;            /* VBus change debounce timer handle. */
     TimerHandle_t FpgaStatusTimer;
     TimerHandle_t fpsTimer;
+    TimerHandle_t evtLogTimer;                  /* Timer to print eventLog. */
 
+    uint16_t glDmaProdBufSize;
     uint32_t glfps;
     uint32_t glDmaBufCnt;
     uint32_t glDmaBufCnt_prv;
@@ -458,15 +479,11 @@ struct cy_stc_usb_app_ctxt_
     volatile uint32_t glPartialBufSize;
 
     uint8_t bRequest;
-    uint8_t bReqType;
-    uint8_t bType;
-    uint8_t bTarget;
     uint16_t wValue;
     uint16_t wIndex;
-    uint16_t wLength;
 
     uint32_t *pUsbEvtLogBuf;
-    TimerHandle_t evtLogTimer;                  /* Timer to print eventLog. */
+
 
 #if AUDIO_IF_EN
     /* UAC interface specific fields. */
@@ -474,9 +491,7 @@ struct cy_stc_usb_app_ctxt_
     uint8_t *pPDMRxBuffer[PDM_APP_BUFFER_CNT];  /* Pointer of buffers to read PDM data into. */
     uint16_t pdmRxDataLen[PDM_APP_BUFFER_CNT];  /* Amount of data in each PDM RX buffer. */
     uint8_t  pdmRxBufIndex;                     /* Index of current PDM read buffer. */
-    uint8_t  nxtAudioTxBufIndex;                /* Index of next audio buffer to be sent on USB EP. */
     uint8_t  pdmRxFreeBufCount;                 /* Number of free PDM RX buffers. */
-    bool     pdmInXferPending;                  /* Whether a write has been queued on IN EP. */
     uint8_t  pdmPendingDmaFlag;                 /* Flag indicating whether DMA transfer is pending on
                                                     each PDM RX channel. */
     TaskHandle_t  uacAppTaskHandle;             /* Handle to the UAC application task. */
@@ -488,6 +503,10 @@ struct cy_stc_usb_app_ctxt_
     uint8_t glpassiveSerialMode;
     uint8_t *qspiWriteBuffer;
     uint8_t *qspiReadBuffer;
+#if LVDS_LOW_POWER_EN
+    uint8_t bmLinkL1EnterStatus;                 /* Bitmask that shows l1 status for each link */
+    uint8_t bmLinkL3EnterStatus;                 /* Bitmask that shows l3 status for each link */
+#endif
 };
 
 typedef struct cy_stc_usb_app_ctxt_ cy_stc_usb_app_ctxt_t;
@@ -502,7 +521,7 @@ extern cy_stc_hbdma_channel_t lvdsLbPgmChannel;
 *
 * \param handle
 * HBDMA channel handle
-* 
+*
 * \param cy_en_hbdma_cb_type_t
 * HBDMA channel type
 *
@@ -567,7 +586,7 @@ void Cy_USB_AppInit(cy_stc_usb_app_ctxt_t *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUs
 void Cy_USB_AppRegisterCallback(cy_stc_usb_app_ctxt_t *pAppCtxt);
 
 /****************************************************************************
-* Function Name: Cy_USB_AppSetCfgCallback(void *pUserCtxt, 
+* Function Name: Cy_USB_AppSetCfgCallback(void *pUserCtxt,
                                         cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
                                         cy_stc_usb_cal_msg_t *pMsg)
 ******************************************************************************
@@ -792,7 +811,7 @@ void Cy_USB_AppL1SleepCallback(void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt
 *
 ******************************************************************************/
 void Cy_USB_AppL1ResumeCallback(void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt, cy_stc_usb_cal_msg_t *pMsg);
- 
+
 /******************************************************************************
 * Function name: Cy_USB_AppZlpCallback(void *pUsbApp, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
                            cy_stc_usb_cal_msg_t *pMsg)
@@ -882,7 +901,7 @@ void Cy_USB_AppSetFeatureCallback(void *pUsbApp, cy_stc_usb_usbd_ctxt_t *pUsbdCt
 void Cy_USB_AppClearFeatureCallback(void *pUsbApp, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt, cy_stc_usb_cal_msg_t *pMsg);
 
 /******************************************************************************
-* Function name: CyApp_RegisterUsbDescriptors(cy_stc_usb_app_ctxt_t *pAppCtxt, 
+* Function name: CyApp_RegisterUsbDescriptors(cy_stc_usb_app_ctxt_t *pAppCtxt,
                                               cy_en_usb_speed_t usbSpeed)
 *******************************************************************************
 *
@@ -899,31 +918,6 @@ void Cy_USB_AppClearFeatureCallback(void *pUsbApp, cy_stc_usb_usbd_ctxt_t *pUsbd
 *
 ******************************************************************************/
 void CyApp_RegisterUsbDescriptors(cy_stc_usb_app_ctxt_t *pAppCtxt, cy_en_usb_speed_t usbSpeed);
-
-/******************************************************************************
-* Function name: Cy_USB_AppQueueWrite(cy_stc_usb_app_ctxt_t *pAppCtxt, uint8_t endpNumber,
-                          uint8_t *pBuffer, uint32_t dataSize)
-*******************************************************************************
-*
-* Queue USBHS Write on the USB endpoint
-*
-* \param pAppCtxt
-* application layer context pointer.
-*
-* \param endpNumber
-* Endpoint number
-*
-* \param pBuffer
-* Data Buffer Pointer
-*
-* \param dataSize
-* DataSize to send on USB bus
-*
-* \return
-* None
-*
-******************************************************************************/
-void Cy_USB_AppQueueWrite(cy_stc_usb_app_ctxt_t *pAppCtxt, uint8_t endpNumber, uint8_t *pBuffer, uint32_t dataSize);
 
 /******************************************************************************
 * Function name: Cy_USB_AppQueueRead(void *pAppCtxt, uint8_t endpNumber,
@@ -997,57 +991,19 @@ uint16_t Cy_USB_AppReadShortPacket(cy_stc_usb_app_ctxt_t *pAppCtxt, uint8_t endp
 ******************************************************************************/
 void Cy_USB_AppInitDmaIntr(uint32_t endpNumber, cy_en_usb_endp_dir_t endpDirection, cy_israddress userIsr);
 
-/******************************************************************************
-* Function name: Cy_USB_AppClearDmaInterrupt(cy_stc_usb_app_ctxt_t *pAppCtxt,
-                                 uint32_t endpNumber, cy_en_usb_endp_dir_t endpDirection)
-*******************************************************************************
-*
-* Clear DMA Interrupt
-*
-* \param pAppCtxt
-* application layer context pointer.
-*
-* \param endpNumber
-* Endpoint number
-*
-* \param endpDirection
-* Endpoint direction
-*
-* \return
-* None
-*
-******************************************************************************/
-void Cy_USB_AppClearDmaInterrupt(cy_stc_usb_app_ctxt_t *pAppCtxt, uint32_t endpNumber, cy_en_usb_endp_dir_t endpDirection);
-
-/******************************************************************************
-* Function Name: Cy_UVC_AppHandleSendCompletion(cy_stc_usb_app_ctxt_t  *pAppCtxt)
-*******************************************************************************
-* Summary:
-* Function that handles DMA transfer completion on the USB-HS BULK-IN
-* endpoint. This is equivalent to the receipt of a cosnume event in the USB-SS use
-* case.
-*
-* \param pAppCtxt
-* application layer context pointer.
-*
-* \return
-* None
-*
- *****************************************************************************/
-void Cy_UVC_AppHandleSendCompletion(cy_stc_usb_app_ctxt_t *pUsbApp);
-
-/******************************************************************************
- * Function Name: Cy_U3V_CommandChannel_ISR(void)
- ******************************************************************************
- * 
- * Handler for interrupts from the DataWire channel used to receive UVC  data
+/*****************************************************************************
+ * Function Name: Cy_UVC_DataWire_ISR(void)
+ *****************************************************************************
+ *
+ * Handler for DataWire interrupts associated with DMA transfers into
+ * USB-HS Video Streaming endpoint.
  *
  * Parameters:
  *  None
  *
  * Return:
  *  void
- *****************************************************************************/
+ ****************************************************************************/
 void Cy_UVC_DataWire_ISR(void);
 
 /******************************************************************************
@@ -1071,7 +1027,7 @@ bool Cy_USB_SSConnectionEnable(cy_stc_usb_app_ctxt_t *pAppCtxt);
  * Summary
  *  PSVP specific USB disconnect function.
  *
- * Parameters: 
+ * Parameters:
  *  \param pAppCtxt
  *  Pointer to application context structure.
  *
@@ -1233,8 +1189,8 @@ void Cy_UAC_AppInit(cy_stc_usb_app_ctxt_t *pAppCtxt);
  * Parameters:
  *  \param pAppCtxt
  * Pointer to application context structure.
- * 
- *  \param dataLength 
+ *
+ *  \param dataLength
  * Length of data (in bytes) to read from each RX FIFO.
  *
  * Return:
@@ -1248,9 +1204,9 @@ void Cy_PDM_AppQueueRead(cy_stc_usb_app_ctxt_t *pAppCtxt, uint32_t dataLength);
  *  Set Interface request handler for the UAC audio streaming interface.
  *
  * Parameters:
- *  \param pAppCtxt 
+ *  \param pAppCtxt
  * Pointer to the application context structure.
- * 
+ *
  *  \param altSetting
  * Selected alternate setting for the audio streaming interface.
  *
@@ -1260,7 +1216,7 @@ void Cy_PDM_AppQueueRead(cy_stc_usb_app_ctxt_t *pAppCtxt, uint32_t dataLength);
 void Cy_UAC_AppSetIntfHandler(cy_stc_usb_app_ctxt_t *pAppCtxt, uint8_t altSetting);
 
 /******************************************************************************
-* Function Name: Cy_USB_AppPrintUsbEventLog(cy_stc_usb_app_ctxt_t *pAppCtxt, 
+* Function Name: Cy_USB_AppPrintUsbEventLog(cy_stc_usb_app_ctxt_t *pAppCtxt,
                                             cy_stc_usbss_cal_ctxt_t *pSSCal)
 *******************************************************************************
 * Summary:
@@ -1358,12 +1314,42 @@ void Cy_CheckStatusAndHandleFailure(const char *function, uint32_t line, uint8_t
 *  I2C wRites to FPGA to set up Phy & Link trianing patterns
 *
 * Parameters:
-* 
+*
 *
 * Return:
 *  0 for read success, error code for unsuccess.
 ******************************************************************************/
 cy_en_scb_i2c_status_t Cy_FPGAPhyLnkTraining (void);
+
+/******************************************************************************
+* Function Name: cy_usb_get_lvds_phy_gear_ratio(void)
+*******************************************************************************
+*
+* Get the LVDS PHY Gearing ration
+*
+* Parameters:
+*
+*
+* Return:
+*  Gearing ratio used to configure the LVDS IP
+******************************************************************************/
+uint8_t cy_usb_get_lvds_phy_gear_ratio (void);
+
+/*****************************************************************************
+ * Function Name: Cy_App_LvdsRetraining
+ *****************************************************************************
+ *
+ * Perform LVDS link retraining by toggling LINK_READY to signal the FPGA
+ * and restarting PHY training, GPIF state machine, and data streaming.
+ *
+ * \param pAppCtxt
+ * Pointer to the application context structure.
+ *
+ * \return
+ * CY_LVDS_SUCCESS or error status from the LVDS PDL functions.
+ *
+ ****************************************************************************/
+void Cy_App_LvdsRetraining (cy_stc_usb_app_ctxt_t *pAppCtxt);
 
 #if defined(__cplusplus)
 }

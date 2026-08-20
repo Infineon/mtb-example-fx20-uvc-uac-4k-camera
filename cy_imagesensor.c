@@ -478,16 +478,16 @@ cy_en_scb_i2c_status_t Cy_ImageSensorSendI2cTable( uint8_t SensorAddress, const 
 * Calls:          Cy_ImageSensorSendI2cTable()
 *
 ******************************************************************************/
-uint32_t Cy_ImageSensorConfigure(const cy_stc_sensor_config_t *SensorConfig, uint16_t count)
+cy_en_scb_i2c_status_t Cy_ImageSensorConfigure(const cy_stc_sensor_config_t *SensorConfig, uint16_t count)
 {
-    uint32_t status = true;
+    cy_en_scb_i2c_status_t status = true;
     /* Send Sony image sensor configuration details */
     DBG_APP_INFO("Cy_ImageSensorConfigure  count = %d\r\n",count);
     status = Cy_ImageSensorSendI2cTable(SENSOR_SLAVE_ADDR, SensorConfig, count);
 
     /* 200ms delay needed by the sony image sensor before the start */
     for(count = 0; count < 200; count++)
-    Cy_SysLib_DelayUs(1000); /* Delay 200ms */
+        Cy_SysLib_DelayUs(1000); /* Delay 200ms */
 
     /* Send start command to sony image sensor */
     status = Cy_ImageSensorSendI2cTable(SENSOR_SLAVE_ADDR, imx715_StartOperation, 1);
@@ -508,9 +508,9 @@ uint32_t Cy_ImageSensorConfigure(const cy_stc_sensor_config_t *SensorConfig, uin
 *   Calls:          Cy_ImageSensorSendI2cTable()
 *
 ******************************************************************************/
-uint32_t Cy_ImageSensorSetResolution(uint32_t width,uint32_t height)
+cy_en_scb_i2c_status_t Cy_ImageSensorSetResolution(uint32_t width,uint32_t height)
 {
-    uint32_t status;
+    cy_en_scb_i2c_status_t status;
     uint16_t count = 0;
     DBG_APP_INFO("Resolution %d x %d\r\n",width,height);
     if((width == 3840) && (height == 2160))

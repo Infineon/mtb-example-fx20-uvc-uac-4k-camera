@@ -126,13 +126,6 @@ cy_stc_video_control_uint8_t LEDTorchLevel = {0,0,100,10,0,1};
 uint8_t LED_Status = 0;
 static uint8_t VC_Get_Info = 0x03;
 
-
-
-extern void fpga_scbTx(uint8_t *tx_buf, uint8_t len);
-uint8_t fpga_scbRxBuffer[4];
-uint8_t fpga_scbTxBuffer[64] = {0};
-
-
 /* Camera Control Command to Ti180 */
 #define ADDR_GAIN_MODE          0x1000
 #define ADDR_MANUAL_GAIN        0x1004
@@ -147,93 +140,6 @@ uint8_t fpga_scbTxBuffer[64] = {0};
 #define ADDR_COLOR_ADJ_HUE      0x1360
 #define ADDR_GAMMA              0x1504
 #define ADDR_SENSOR_MIRROR      0x3030
-
-/******************************************************************************
-* Function Name: SendCmd(uint16_t addr, int32_t value)
-*******************************************************************************
-* Summary:
-*  Function that sends video control data to CIS ISP over UART
-*
-* \param addr
-* CIS ISP video control register address.
-*
-* \param value
-* value of the register
-*
-* \return
-* None
-*
-******************************************************************************/
-static void SendCmd(uint16_t addr, int32_t value)
-{
-    uint8_t *p = fpga_scbTxBuffer;
-
-    if(ADDR_SENSOR_MIRROR == addr)
-    {
-        *p++ = 'w';
-        *p++ = 's';
-        *p++ = ' ';
-        *p++ = '0';
-        *p++ = 'x';
-
-        /* convert addr to %04X */
-        for (int shift = 12; shift >= 0; shift -= 4) {
-            *p++ = "0123456789abcdef"[addr >> shift & 0xf];
-        }
-
-        *p++ = ' ';
-        uint8_t tmp1[12];
-        int index1 = 0;
-        do {
-            tmp1[index1++] = value % 10 + '0';
-        } while (value /= 10);
-        while (index1) {
-            *p++ = tmp1[--index1];
-        }
-
-        *p++ = '\n';
-        *p = '\0';
-        // DBG_APP_INFO("[Send] %s\r", fpga_scbTxBuffer);
-        fpga_scbTx(fpga_scbTxBuffer, p - fpga_scbTxBuffer);
-        return;
-    }
-
-    /*
-     * send "wc 0x%04X %d\n"
-     */
-    *p++ = 'w';
-    *p++ = 'c';
-    *p++ = ' ';
-    *p++ = '0';
-    *p++ = 'x';
-
-    /* convert addr to %04X */
-    for (int shift = 12; shift >= 0; shift -= 4) {
-        *p++ = "0123456789abcdef"[addr >> shift & 0xf];
-    }
-
-    *p++ = ' ';
-
-    /* convert value to %d */
-    if (value < 0) {
-        *p++ = '-';
-        value = -value; /* ignore INT_MIN */
-    }
-    uint8_t tmp[12];
-    int index = 0;
-    do {
-        tmp[index++] = value % 10 + '0';
-    } while (value /= 10);
-    while (index) {
-        *p++ = tmp[--index];
-    }
-
-    *p++ = '\n';
-    *p = '\0';
-    // DBG_APP_INFO("[Send] %s\r", fpga_scbTxBuffer);
-
-    fpga_scbTx(fpga_scbTxBuffer, p - fpga_scbTxBuffer);
-} /* End of SendCmd() */
 
 /******************************************************************************
 * Function Name: Cy_VideoControlGetInfo_0x03(cy_stc_usb_usbd_ctxt_t *pUsbdCtxt)
@@ -285,7 +191,7 @@ uint32_t Cy_VideoControlHandleVCInterfaceRequest(cy_stc_usb_app_ctxt_t *pAppCtxt
     uint8_t bRequest = pAppCtxt->bRequest;
 
 
-    if (CY_GET_MSB(wIndex) == CY_UVC_VC_CAMERA_TERMINAL_ID) /* Video Control- Camera Teminal */
+    if (CY_GET_MSB(wIndex) == CY_UVC_VC_CAMERA_TERMINAL_ID) /* Video Control- Camera Terminal */
     {
         DBG_APP_INFO("VC:T ID 0x%x CS 0x%x Req 0x%x \n\r", CY_GET_MSB(wIndex), wValue, bRequest);
 
@@ -445,7 +351,7 @@ uint32_t Cy_VideoControlHandleAEControlReq(cy_stc_usb_app_ctxt_t *pAppCtxt, uint
             AE.SetVal = EP0RxBuffer[0];
             DBG_APP_INFO("AE Set Cur  = %d\n\r", AE.SetVal);
             AE.CurrentVal = AE.SetVal;
-            SendCmd(ADDR_SHUTTER_MODE, AE.SetVal == 1 ? 0 : 1); /* 0=Manual, 1=Auto */
+            // SendCmd(ADDR_SHUTTER_MODE, AE.SetVal == 1 ? 0 : 1); /* 0=Manual, 1=Auto */
         }
         else
         {
@@ -637,7 +543,7 @@ uint32_t Cy_VideoControlHandleExpAbsControlReq(cy_stc_usb_app_ctxt_t *pAppCtxt, 
         } else if (shutterValue < 0xd2) {
             shutterValue = 0xd2;    /* Min */
         }
-        SendCmd(ADDR_MANUAL_SHUTTER, shutterValue);
+        //SendCmd(ADDR_MANUAL_SHUTTER, shutterValue);
         return status;
     }
 
@@ -1152,7 +1058,7 @@ uint32_t Cy_VideoControlHandleBacklightCompensationControlReq(cy_stc_usb_app_ctx
         BacklightCompensation.SetVal = *(uint16_t *)EP0RxBuffer;
         DBG_APP_INFO("BacklightCompensation Set Cur  = 0x%X\n\r", BacklightCompensation.SetVal);
         BacklightCompensation.CurrentVal = BacklightCompensation.SetVal;
-        SendCmd(ADDR_METERING_MODE, BacklightCompensation.SetVal == 0 ? 1 : 3); /* 1=Default, 3=Backlight Comp. */
+        //SendCmd(ADDR_METERING_MODE, BacklightCompensation.SetVal == 0 ? 1 : 3); /* 1=Default, 3=Backlight Comp. */
         return status;
     }
 
@@ -1194,7 +1100,7 @@ uint32_t Cy_VideoControlHandleBrightnessControlReq(cy_stc_usb_app_ctxt_t *pAppCt
     switch (bRequest)
     {
     case CY_USB_UVC_GET_CUR_REQ:
-        SendCmd(ADDR_SENSOR_MIRROR,0);
+        //SendCmd(ADDR_SENSOR_MIRROR,0);
         WrBuff = Brightness.CurrentVal;
         DBG_APP_INFO("Brightness Get Cur  = %d\n\r",WrBuff );
         break;
@@ -1229,7 +1135,7 @@ uint32_t Cy_VideoControlHandleBrightnessControlReq(cy_stc_usb_app_ctxt_t *pAppCt
             Brightness.SetVal = *(int16_t *)EP0RxBuffer;
             DBG_APP_INFO("Brightness Set Cur  = %d\n\r", Brightness.SetVal);
             Brightness.CurrentVal = Brightness.SetVal;
-            SendCmd(ADDR_AE_COMPENSATION, Brightness.SetVal);
+            //SendCmd(ADDR_AE_COMPENSATION, Brightness.SetVal);
         }
         else
         {
@@ -1310,7 +1216,7 @@ uint32_t Cy_VideoControlHandleContrastControlReq(cy_stc_usb_app_ctxt_t *pAppCtxt
             Contrast.SetVal = *(uint16_t *)EP0RxBuffer;
             DBG_APP_INFO("Contrast Set Cur  = %d\n\r", Contrast.SetVal);
             Contrast.CurrentVal = Contrast.SetVal;
-            SendCmd(ADDR_GAMMA, Contrast.SetVal);
+            //SendCmd(ADDR_GAMMA, Contrast.SetVal);
         }
         else
         {
@@ -1395,8 +1301,8 @@ uint32_t Cy_VideoControlHandleGainControlReq(cy_stc_usb_app_ctxt_t *pAppCtxt, ui
             Gain.SetVal = *(uint16_t *)EP0RxBuffer;
             DBG_APP_INFO("Gain Set Cur  = %d\n\r", Gain.SetVal);
             Gain.CurrentVal = Gain.SetVal;
-            SendCmd(ADDR_MANUAL_GAIN, Gain.SetVal * 256);
-            SendCmd(ADDR_GAIN_MODE, 0); /* 0=Manual */
+            //SendCmd(ADDR_MANUAL_GAIN, Gain.SetVal * 256);
+            //SendCmd(ADDR_GAIN_MODE, 0); /* 0=Manual */
         }
         else
         {
@@ -1476,7 +1382,7 @@ uint32_t Cy_VideoControlHandleHueControlReq(cy_stc_usb_app_ctxt_t *pAppCtxt, uin
             Hue.SetVal = *(int16_t *)EP0RxBuffer;
             DBG_APP_INFO("Hue Set Cur  = %d\n\r", Hue.SetVal);
             Hue.CurrentVal = Hue.SetVal;
-            SendCmd(ADDR_COLOR_ADJ_HUE, Hue.CurrentVal / 150);  /* Approx. 1.5 degree increments */
+            //SendCmd(ADDR_COLOR_ADJ_HUE, Hue.CurrentVal / 150);  /* Approx. 1.5 degree increments */
         }
         else
         {
@@ -1556,7 +1462,7 @@ uint32_t Cy_VideoControlHandleSaturationControlReq(cy_stc_usb_app_ctxt_t *pAppCt
             Saturation.SetVal = *(uint16_t *)EP0RxBuffer;
             DBG_APP_INFO("Saturation Set Cur  = %d\n\r", Saturation.SetVal);
             Saturation.CurrentVal = Saturation.SetVal;
-            SendCmd(ADDR_COLOR_SATURATION, Saturation.SetVal);
+            //SendCmd(ADDR_COLOR_SATURATION, Saturation.SetVal);
         }
         else
         {
@@ -1635,7 +1541,7 @@ uint32_t Cy_VideoControlHandleSharpnessControlReq(cy_stc_usb_app_ctxt_t *pAppCtx
             Sharpness.SetVal = *(uint16_t *)EP0RxBuffer;
             DBG_APP_INFO("Sharpness Set Cur  = 0x%X\n\r", Sharpness.SetVal);
             Sharpness.CurrentVal = Sharpness.SetVal;
-            SendCmd(ADDR_DETAIL, Sharpness.SetVal);
+            //SendCmd(ADDR_DETAIL, Sharpness.SetVal);
         }
         else
         {
@@ -1917,11 +1823,11 @@ uint32_t Cy_VideoControlHandleAWBTempControlReq(cy_stc_usb_app_ctxt_t *pAppCtxt,
             AWB_Temp.CurrentVal = AWB_Temp.SetVal;
             if (AWB_Temp.SetVal == 0x01) /*Set Auto-White Balance Mode*/
             {
-                SendCmd(ADDR_WB_MODE, 1);   /* 1=Auto */
+                //SendCmd(ADDR_WB_MODE, 1);   /* 1=Auto */
             }
             else /*Set Manual-White Balance Mode*/
             {
-                SendCmd(ADDR_WB_MODE, 2);   /* 2=Preset */
+               // SendCmd(ADDR_WB_MODE, 2);   /* 2=Preset */
             }
         }
         else
@@ -2103,7 +2009,7 @@ uint32_t Cy_VideoControlHandleMWBTempControlReq(cy_stc_usb_app_ctxt_t *pAppCtxt,
             MWB_Temp.SetVal = *(uint16_t *)EP0RxBuffer;
             DBG_APP_INFO("MWB Temp Set Cur  = %d\n\r", MWB_Temp.SetVal);
             MWB_Temp.CurrentVal = MWB_Temp.SetVal;
-            SendCmd(ADDR_WB_PRESET_TEMP, MWB_Temp.SetVal);
+            //SendCmd(ADDR_WB_PRESET_TEMP, MWB_Temp.SetVal);
         }
         else
         {

@@ -35,12 +35,12 @@ cy_stc_scb_i2c_context_t I2C_context;
 uint8_t scb0_i2c_buffer[I2C_BUFF_SIZE];
 
 /******************************************************************************
-* Function Name: Cy_I2C_MasterRead(CySCB_Type *base, uint16_t dev_addr, 
-*                                    const uint8_t *data, uint16_t size, 
+* Function Name: Cy_I2C_MasterRead(CySCB_Type *base, uint16_t dev_addr,
+*                                    const uint8_t *data, uint16_t size,
 *                                    bool send_stop)
 *******************************************************************************
 * Summary:
-* Low level function for reading data from I2C slave 
+* Low level function for reading data from I2C slave
 *
 * Parameters:
 * \param base
@@ -52,13 +52,16 @@ uint8_t scb0_i2c_buffer[I2C_BUFF_SIZE];
 * \param size
 * data size (in bytes)
 * \param send_stop
-* set to 1 to send stop condition else 0 
+* set to 1 to send stop condition else 0
 *
 * Return:
 *  0 for read success, error code for unsuccess.
 ******************************************************************************/
-cy_en_scb_i2c_status_t Cy_I2C_MasterRead(CySCB_Type *base, uint16_t dev_addr, uint8_t *data,
-                        uint16_t size, bool send_stop)
+cy_en_scb_i2c_status_t Cy_I2C_MasterRead(CySCB_Type *base,
+                                            uint16_t dev_addr,
+                                            uint8_t *data,
+                                            uint16_t size,
+                                            bool send_stop)
 {
     uint32_t timeout = 0;
 
@@ -96,12 +99,12 @@ cy_en_scb_i2c_status_t Cy_I2C_MasterRead(CySCB_Type *base, uint16_t dev_addr, ui
 } /* End of Cy_I2C_MasterRead() */
 
 /******************************************************************************
-* Function Name: Cy_I2C_MasterWrite(CySCB_Type *base, uint16_t dev_addr, 
-*                                    const uint8_t *data, uint16_t size, 
+* Function Name: Cy_I2C_MasterWrite(CySCB_Type *base, uint16_t dev_addr,
+*                                    const uint8_t *data, uint16_t size,
 *                                    bool send_stop)
 *******************************************************************************
 * Summary:
-* Low level function for writing data to I2C slave 
+* Low level function for writing data to I2C slave
 *
 * Parameters:
 * \param base
@@ -113,13 +116,16 @@ cy_en_scb_i2c_status_t Cy_I2C_MasterRead(CySCB_Type *base, uint16_t dev_addr, ui
 * \param size
 * data size (in bytes)
 * \param send_stop
-* set to 1 to send stop condition else 0 
+* set to 1 to send stop condition else 0
 *
 * Return:
 *  0 for read success, error code for unsuccess.
 ******************************************************************************/
-cy_en_scb_i2c_status_t Cy_I2C_MasterWrite(CySCB_Type *base, uint16_t dev_addr, const uint8_t *data, 
-                                            uint16_t size, bool send_stop)
+cy_en_scb_i2c_status_t Cy_I2C_MasterWrite(CySCB_Type *base,
+                                            uint16_t dev_addr,
+                                            const uint8_t *data,
+                                            uint16_t size,
+                                            bool send_stop)
 {
     /* Clean-up hardware before transfer. Note RX FIFO is empty at here. */
     Cy_SCB_ClearMasterInterrupt(base, CY_SCB_I2C_MASTER_INTR_ALL);
@@ -177,14 +183,15 @@ cy_en_scb_i2c_status_t Cy_I2C_MasterWrite(CySCB_Type *base, uint16_t dev_addr, c
 * Return:
 *  0 for read success, error code for unsuccess.
 ******************************************************************************/
-cy_en_scb_i2c_status_t Cy_I2C_Read (uint16_t slaveAddress,uint32_t registerAddress,
-                    uint8_t *data,
-                    uint8_t addressWidth,
-                    uint8_t dataWidth)
+cy_en_scb_i2c_status_t Cy_I2C_Read (uint16_t slaveAddress,
+                                    uint32_t registerAddress,
+                                    uint8_t *data,
+                                    uint8_t addressWidth,
+                                    uint8_t dataWidth)
 {
     cy_en_scb_i2c_status_t  status = CY_SCB_I2C_SUCCESS;
     uint8_t mem_addr_buf[4] = {0};
-    /* Copy address information into buffer */ 
+    /* Copy address information into buffer */
     if (addressWidth == 1)
     {
         mem_addr_buf[0] = (uint8_t)registerAddress;
@@ -212,13 +219,14 @@ cy_en_scb_i2c_status_t Cy_I2C_Read (uint16_t slaveAddress,uint32_t registerAddre
 } /* End of Cy_I2C_Read() */
 
 /******************************************************************************
-* Function Name: Cy_I2C_Write(uint16_t slaveAddress,uint16_t registerAddress,
-                    uint8_t data,
-                    uint8_t addressWidth,
-                    uint8_t dataWidth)
+* Function Name: Cy_I2C_Write(uint16_t slaveAddress,
+                              uint16_t registerAddress,
+                              uint8_t data,
+                              uint8_t addressWidth,
+                              uint8_t dataWidth)
 *******************************************************************************
 * Summary:
-* Function to write data to i2c slave 
+* Function to write data to i2c slave
 *
 * Parameters:
 * \param slaveAddress
@@ -235,10 +243,11 @@ cy_en_scb_i2c_status_t Cy_I2C_Read (uint16_t slaveAddress,uint32_t registerAddre
 * Return:
 *  0 for read success, error code for unsuccess.
 ******************************************************************************/
-cy_en_scb_i2c_status_t Cy_I2C_Write (uint16_t slaveAddress,uint16_t registerAddress,
-                    uint8_t data,
-                    uint8_t addressWidth,
-                    uint8_t dataWidth)
+cy_en_scb_i2c_status_t Cy_I2C_Write (uint16_t slaveAddress,
+                                    uint16_t registerAddress,
+                                    uint8_t data,
+                                    uint8_t addressWidth,
+                                    uint8_t dataWidth)
 {
     /* Print only FPGA-related I2C transactions for ease of debugging */
     if(slaveAddress == FPGASLAVE_ADDR)

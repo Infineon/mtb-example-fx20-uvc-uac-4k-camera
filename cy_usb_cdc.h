@@ -48,7 +48,7 @@
 
 #define VCOM_RESPONSE_TIME                 (250)  /** UART RX buffer polling duration in milliseconds. */
 #define VCOM_UART_MAX_RD_SIZE              (64u)   /** Maximum size of data read from UART RX FIFO in one burst. */
- 
+
 #define UART_WRITE                         (1)
 #define UART_READ                          (2)
 #define UART_WRITE_DMA_CHANNEL             (18)

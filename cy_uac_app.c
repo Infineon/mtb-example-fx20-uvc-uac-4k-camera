@@ -7,7 +7,7 @@
 *
 *******************************************************************************
 * \copyright
-* (c) (2021-2023), Cypress Semiconductor Corporation (an Infineon company) or
+* (c) (2021-2026), Cypress Semiconductor Corporation (an Infineon company) or
 * an affiliate of Cypress Semiconductor Corporation.
 *
 * SPDX-License-Identifier: Apache-2.0
@@ -211,36 +211,6 @@ static void Cy_PDM_AppDmaReadCompletion (cy_stc_usb_app_ctxt_t *pAppCtxt)
 } /* End of Cy_PDM_AppDmaReadCompletion() */
 
 /******************************************************************************
- * Function Name: Cy_UAC_AppDmaWriteCompletion
- ******************************************************************************
- * Summary
- *  Handle the completion of DMA transfer of audio data from RAM buffer into
- *  the USB 2.x EPM buffers.
- *
- * Parameters:
- *  \param pAppCtxt 
- * Pointer to application context structure.
- *
- * Return:
- *  void
- *****************************************************************************/
-static void Cy_UAC_AppDmaWriteCompletion (cy_stc_usb_app_ctxt_t *pAppCtxt)
-{
-    BaseType_t status;
-    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    cy_stc_usbd_app_msg_t xMsg;
-
-    /* Clear the transfer pending flag. */
-    pAppCtxt->pdmInXferPending = false;
-
-    xMsg.type = CY_USB_PDM_MSG_WRITE_COMPLETE;
-    status = xQueueSendFromISR(pAppCtxt->uacMsgQueue, &(xMsg), &(xHigherPriorityTaskWoken));
-
-    (void)status;
-    (void)xHigherPriorityTaskWoken;
-} /* End of Cy_UAC_AppDmaWriteCompletion() */
-
-/******************************************************************************
  * Function Name: Cy_PDM_CH1RX_ISR
  ******************************************************************************
  * Summary
@@ -311,8 +281,7 @@ void Cy_PDM_CH0RX_ISR (void)
  *****************************************************************************/
 void Cy_PDM_InEpDma_ISR (void)
 {
-    Cy_USB_AppClearDmaInterrupt(&appCtxt, UAC_IN_ENDPOINT, CY_USB_ENDP_DIR_IN);
-    Cy_UAC_AppDmaWriteCompletion((void *)&appCtxt);
+    Cy_HBDma_Mgr_HandleDW1Interrupt(appCtxt.pHbDmaMgrCtxt);
     portYIELD_FROM_ISR(true);
 } /* End of Cy_PDM_InEpDma_ISR() */
 
@@ -398,8 +367,8 @@ void Cy_PDM_AppChannelActivateTimerCb (TimerHandle_t xTimer)
  * Parameters:
  *  \param pAppCtxt
  * Pointer to application context structure.
- * 
- *  \param dataLength 
+ *
+ *  \param dataLength
  * Length of data (in bytes) to read from each RX FIFO.
  *
  * Return:
@@ -517,10 +486,10 @@ void Cy_PDM_AppQueueRead (cy_stc_usb_app_ctxt_t *pAppCtxt,
  * Parameters:
  *  \param pAppCtxt
  * Pointer to application context structure.
- * 
+ *
  *  \param dataBuf_p
  *  Pointer to data buffer.
- * 
+ *
  *  \param dataLength
  * Length of data to be sent.
  *
@@ -533,31 +502,15 @@ void Cy_UAC_AppPDMSendData (cy_stc_usb_app_ctxt_t *pAppCtxt,
     cy_stc_hbdma_buff_status_t dmaBufStat;
     cy_en_hbdma_mgr_status_t   hbdma_stat;
 
-    if (pAppCtxt->devSpeed > CY_USBD_USB_DEV_HS)
-    {
-        dmaBufStat.pBuffer = dataBuf_p;
-        dmaBufStat.size    = dataLength;
-        dmaBufStat.count   = dataLength;
-        dmaBufStat.status  = 0;
+    dmaBufStat.pBuffer = dataBuf_p;
+    dmaBufStat.size    = dataLength;
+    dmaBufStat.count   = dataLength;
+    dmaBufStat.status  = 0;
 
-        /* In USB 3.x connections, just commit the buffer. */
-        hbdma_stat = Cy_HBDma_Channel_CommitBuffer(pAppCtxt->pPDMToUsbChn, &dmaBufStat);
-        if (hbdma_stat != CY_HBDMA_MGR_SUCCESS) {
-            DBG_APP_ERR("Cy_USB_AppPDMSendPDMData: DMA error=%x\r\n", hbdma_stat);
-        }
-    }
-    else
-    {
-        /* Send the data on the IN endpoint if it is currently idle. */
-        if (!pAppCtxt->pdmInXferPending) {
-            pAppCtxt->pdmInXferPending = true;
-            Cy_USB_AppQueueWrite(pAppCtxt, UAC_IN_ENDPOINT, dataBuf_p, dataLength);
-
-            pAppCtxt->nxtAudioTxBufIndex++;
-            if (pAppCtxt->nxtAudioTxBufIndex >= PDM_APP_BUFFER_CNT) {
-                pAppCtxt->nxtAudioTxBufIndex = 0;
-            }
-        }
+    /* Commit the buffer to initiate transfer to USB host. */
+    hbdma_stat = Cy_HBDma_Channel_CommitBuffer(pAppCtxt->pPDMToUsbChn, &dmaBufStat);
+    if (hbdma_stat != CY_HBDMA_MGR_SUCCESS) {
+        DBG_APP_ERR("Cy_USB_AppPDMSendPDMData: DMA error=%x\r\n", hbdma_stat);
     }
 } /* End of Cy_UAC_AppPDMSendData() */
 
@@ -623,23 +576,6 @@ void Cy_UAC_AppDeviceTaskHandler (void *pTaskParam)
                 }
                 break;
 
-            case CY_USB_PDM_MSG_WRITE_COMPLETE:
-                /* Data has been consumed on USB side and buffer is free now. */
-                if (pAppCtxt->pdmRxFreeBufCount == 0) {
-                    /* Queue read from the UART RX FIFO into the next DMA buffer. */
-                    Cy_PDM_AppQueueRead(pAppCtxt, UAC_EP_MAX_PKT_SIZE);
-                }
-
-                pAppCtxt->pdmRxFreeBufCount++;
-
-                /* If we have at least one occupied buffer, queue the next write operation. */
-                if (pAppCtxt->pdmRxFreeBufCount < PDM_APP_BUFFER_CNT) {
-                    Cy_UAC_AppPDMSendData(pAppCtxt,
-                            pAppCtxt->pPDMRxBuffer[pAppCtxt->nxtAudioTxBufIndex],
-                            pAppCtxt->pdmRxDataLen[pAppCtxt->nxtAudioTxBufIndex]);
-                }
-                break;
-
             default:
                 DBG_APP_INFO("UACTask: Unknown message %x\r\n", queueMsg.type);
                 break;
@@ -655,9 +591,9 @@ void Cy_UAC_AppDeviceTaskHandler (void *pTaskParam)
  *  Set Interface request handler for the UAC audio streaming interface.
  *
  * Parameters:
- *  \param pAppCtxt 
+ *  \param pAppCtxt
  * Pointer to the application context structure.
- * 
+ *
  *  \param altSetting
  * Selected alternate setting for the audio streaming interface.
  *

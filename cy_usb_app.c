@@ -46,7 +46,6 @@
 #include "cy_usb_qspi.h"
 #include "cy_usb_descriptors.h"
 
-
 /* Buffer counter for different resolution */
 uint32_t cy_uvc_commitLength = 0;
 uint16_t cy_uvc_buffer_counter = 1;
@@ -55,8 +54,6 @@ uint16_t cy_uvc_buffer_counter = 1;
 uint16_t cy_uvc_currentFrameIndex = CY_USB_UVC_SS_4K_FRAME_INDEX;
 uint16_t cy_usb_full_buffer_no = CY_USB_FULL_BUFFER_NO_3840_2160;
 uint16_t cy_usb_no_bytes_last_buffer = CY_USB_NO_BYTE_LAST_BUFFER_3840_2160;
-
-static bool PrintLinkTrainInfo = true;
 
 #define FPS_DEFAULT          (60)
 #define DMA_BUFFER_SIZE      (CY_USB_UVC_STREAM_BUF_SIZE)
@@ -67,6 +64,13 @@ static bool PrintLinkTrainInfo = true;
 #define FPGA_DMA_BUFFER_SIZE (DMA_BUFFER_SIZE)
 #endif /* UVC_HEADER_BY_FX20 */
 
+/* DMA buffer size in HS when FW build with Auto DMA */
+#define FPGA_DMA_BUFFER_SIZE_HS (CY_USB_UVC_STREAM_BUF_SIZE_HS - CY_USB_UVC_MAX_HEADER)
+
+#if ((AUDIO_IF_EN) && (!LVCMOS_EN) && (FPGA_ENABLE))
+static uint32_t glAudioDataBuf[PDM_APP_BUFFER_CNT][UAC_XFER_BUF_SIZE / 4];
+#endif /* ((AUDIO_IF_EN) && (!LVCMOS_EN) && (FPGA_ENABLE)) */
+
 uint8_t glIsSensorConfigured;
 bool glIsFPGARegConfigured = false;
 extern bool glIsFPGAConfigured;
@@ -76,6 +80,8 @@ extern bool glIsLVDSLink1TrainingDone;
 extern uint8_t glPhyLinkTrainControl;
 extern cy_stc_hbdma_buf_mgr_t HBW_BufMgr;
 extern cy_stc_usb_app_ctxt_t appCtxt;
+extern cy_stc_usb_cal_ctxt_t hsCalCtxt;
+extern cy_stc_debug_config_t dbgCfg;
 extern void Cy_UVC_PrintLVDSConfigInfo(void);
 
 /* UVC Probe Control Settings for a USB 3.0 connection. */
@@ -341,7 +347,7 @@ void Cy_CheckStatusAndHandleFailure(const char *function, uint32_t line,
 * Function Name: Cy_AppPrintStartupLogs(void)
 *******************************************************************************
 * Summary:
-* Prints Initiall configuration information
+* Prints Initial configuration information
 *
 * Parameters:
 * void
@@ -355,6 +361,7 @@ void Cy_AppPrintStartupLogs(void)
     LOG_COLOR("\r\n\r\n\r\n****************************************************\r\n");
 
     DBG_APP_INFO("DEMO_FX20 with Ti180 FPGA\r\n");
+    DBG_APP_INFO("SPEED %d\r\n", appCtxt.devSpeed);
 
 #if (LVCMOS_EN)
 #if (LVCMOS_DDR_EN)
@@ -373,6 +380,16 @@ void Cy_AppPrintStartupLogs(void)
     DBG_APP_INFO("PORT1 Narrow_Link Mode\r\n");
 #else
     DBG_APP_INFO("PORT0 Narrow_Link Mode\r\n");
+#endif
+
+#if (LVCMOS_EN && LVCMOS_DDR_EN && WL_EN)
+    LOG_COLOR("PhyTraining=%s, Link0Training=%s, Link1Training=%s: FPGA%sConfigured \n\r", "NA" , \
+    (glIsLVDSLink0TrainingDone?"PASS":"FAIL"),(glIsLVDSLink1TrainingDone?"PASS":"FAIL"), (glIsFPGAConfigured?"-":"-Not"));
+#elif (LVCMOS_EN && (!LVCMOS_DDR_EN || PORT1_EN || !WL_EN)) /* LVCMOS SDR, and LVCMOS DDR P0,P1 NL */
+    LOG_COLOR("PhyTraining=%s, Link0Training=%s, Link1Training=%s: FPGA%sConfigured \n\r", "NA", "NA","NA", (glIsFPGAConfigured?"-":"-Not"));
+#elif(!LVCMOS_EN) /* LVDS */
+    LOG_COLOR("PhyTraining=%s, Link0Training=%s, Link1Training=%s: FPGA%sConfigured \n\r", (glIsLVDSPhyTrainingDone?"PASS":"FAIL")\
+    ,(PORT1_EN?"NA":(glIsLVDSLink0TrainingDone?"PASS":"FAIL")),((PORT1_EN|WL_EN)?(glIsLVDSLink1TrainingDone?"PASS":"FAIL"):"NA"), (glIsFPGAConfigured?"-":"-Not"));
 #endif
 
 #ifdef FIRMWARE_ID
@@ -406,7 +423,7 @@ void Cy_UVC_AppGpifIntr(void *pApp)
 {
     cy_stc_usb_app_ctxt_t *pAppCtxt;
     pAppCtxt = (cy_stc_usb_app_ctxt_t*)pApp;
-    DBG_APP_INFO("CyU3vAppGpifIntr\n\r");
+    DBG_APP_INFO("Cy_UVC_AppGpifIntr\n\r");
     /* Reset the DMA channel through which data is received from the LVDS side. */
     Cy_HBDma_Channel_Reset(pAppCtxt->hbBulkInChannel);
 
@@ -423,10 +440,7 @@ void Cy_UVC_AppGpifIntr(void *pApp)
         Cy_USBSS_Cal_ClkStopOnEpRstEnable(pAppCtxt->pUsbdCtxt->pSsCalCtxt, false);
     }
 
-    pAppCtxt->uvcPendingBufCnt = 0;
     Cy_USBD_SendAckSetupDataStatusStage(pAppCtxt->pUsbdCtxt);
-
-    return;
 } /* End of Cy_UVC_AppGpifIntr() */
 
 /******************************************************************************
@@ -540,7 +554,7 @@ void Cy_UVC_PrintDMAReg(uint8_t adapterNo, uint8_t socketNo)
     //DBG_APP_INFO("DSCR_CHAIN:%x \r\n",LVDSSS_LVDS->ADAPTER_DMA[adapterNo].SCK[socketNo].DSCR_CHAIN);
     //DBG_APP_INFO("DSCR_SIZE:%x \r\n",LVDSSS_LVDS->ADAPTER_DMA[adapterNo].SCK[socketNo].DSCR_SIZE);
     DBG_APP_INFO("End RegisterPrint............\r\n");
-} //End of Cy_UVC_PrintDMAReg()
+} /* End of Cy_UVC_PrintDMAReg() */
 
 /******************************************************************************
 * Function Name: Cy_UVC_StreamStartStop(uint8_t IsStreamStart)
@@ -574,16 +588,8 @@ cy_en_scb_i2c_status_t Cy_UVC_StreamStartStop(uint8_t IsStreamStart)
         status = Cy_I2C_Write(FPGASLAVE_ADDR,(DEVICE0_OFFSET+FPGA_DEVICE_STREAM_ENABLE_ADDRESS),CAMERA_APP_DISABLE,
                                             FPGA_I2C_ADDRESS_WIDTH,FPGA_I2C_DATA_WIDTH);
     }
-    DBG_APP_INFO("i2c status = 0x%x\n\r",status);
-
-    if(CY_SCB_I2C_SUCCESS == status)
-    {
-        DBG_APP_INFO("Video App = %d\n\r",IsStreamStart);
-    }
-    else
-    {
-        DBG_APP_ERR(" Cy_UVC_StreamStartStop: Video App start failed \n\r");
-    }
+    (CY_SCB_I2C_SUCCESS == status)? DBG_APP_INFO("Video App = %d\n\r",IsStreamStart):\
+                                    DBG_APP_ERR(" Cy_UVC_StreamStartStop: Video App start failed \n\r");
     return status;
 } /* End of Cy_UVC_StreamStartStop() */
 
@@ -605,7 +611,7 @@ cy_en_scb_i2c_status_t Cy_UVC_StreamStartStop(uint8_t IsStreamStart)
 static cy_en_scb_i2c_status_t Cy_ConfigFpgaRegister (void)
 {
     cy_en_scb_i2c_status_t status = CY_SCB_I2C_SUCCESS;
-    /* Defalut resolution*/
+    /* Default resolution*/
     uint16_t width = 3840;
     uint16_t height = 2160;
 
@@ -624,7 +630,7 @@ static cy_en_scb_i2c_status_t Cy_ConfigFpgaRegister (void)
     status = Cy_I2C_Write(FPGASLAVE_ADDR,FPGA_UVC_HEADER_CTRL_ADDRESS,FPGA_UVC_HEADER_ENABLE,
                                         FPGA_I2C_ADDRESS_WIDTH,FPGA_I2C_DATA_WIDTH);
 #elif UVC_HEADER_BY_FX20
-    DBG_APP_INFO("FX10 Adds UVC Header\r\n");
+    DBG_APP_INFO("FX20 Adds UVC Header\r\n");
         /* Disable adding UVC header by FPGA. UVC header is added by FX10 */
     status = Cy_I2C_Write(FPGASLAVE_ADDR,FPGA_UVC_HEADER_CTRL_ADDRESS,FPGA_UVC_HEADER_DISABLE,
                                         FPGA_I2C_ADDRESS_WIDTH,FPGA_I2C_DATA_WIDTH);
@@ -643,15 +649,14 @@ static cy_en_scb_i2c_status_t Cy_ConfigFpgaRegister (void)
     ASSERT_NON_BLOCK(status == CY_SCB_I2C_SUCCESS, status);
     Cy_SysLib_DelayUs(500);
 
-
-    /* write FPGA register to Disable format converstion */
+    /* write FPGA register to Disable format conversion */
     status = Cy_I2C_Write(FPGASLAVE_ADDR,DEVICE0_OFFSET+FPGA_DEVICE_STREAM_MODE_ADDRESS,NO_CONVERSION,
                                           FPGA_I2C_ADDRESS_WIDTH,FPGA_I2C_DATA_WIDTH);
     ASSERT_NON_BLOCK(status == CY_SCB_I2C_SUCCESS, status);
 
     /* Select video source */
 #if SONY_IMX715_EN || THINE_EN
-    status = Cy_I2C_Write(FPGASLAVE_ADDR,DEVICE0_OFFSET+DEVICE_SOURCE_TYPE_ADDRESS,MIPI_SOURCE, // MIPI_SOURCE
+    status = Cy_I2C_Write(FPGASLAVE_ADDR,DEVICE0_OFFSET+DEVICE_SOURCE_TYPE_ADDRESS,MIPI_SOURCE,
                                           FPGA_I2C_ADDRESS_WIDTH,FPGA_I2C_DATA_WIDTH);
     ASSERT_NON_BLOCK(status == CY_SCB_I2C_SUCCESS, status);
 #if SONY_IMX715_EN
@@ -664,7 +669,7 @@ static cy_en_scb_i2c_status_t Cy_ConfigFpgaRegister (void)
     ASSERT_NON_BLOCK(status == CY_SCB_I2C_SUCCESS, status);
 #endif
 #else
-    status = Cy_I2C_Write(FPGASLAVE_ADDR,DEVICE0_OFFSET+DEVICE_SOURCE_TYPE_ADDRESS,INTERNAL_COLORBAR, //INTERNAL_COLORBAR MIPI_SOURCE
+    status = Cy_I2C_Write(FPGASLAVE_ADDR,DEVICE0_OFFSET+DEVICE_SOURCE_TYPE_ADDRESS,INTERNAL_COLORBAR,
                                           FPGA_I2C_ADDRESS_WIDTH,FPGA_I2C_DATA_WIDTH);
     ASSERT_NON_BLOCK(status == CY_SCB_I2C_SUCCESS, status);
 #endif
@@ -728,7 +733,7 @@ static cy_en_scb_i2c_status_t Cy_ConfigFpgaRegister (void)
                                         FPGA_I2C_ADDRESS_WIDTH,FPGA_I2C_DATA_WIDTH);
     ASSERT_NON_BLOCK(status == CY_SCB_I2C_SUCCESS, status);
     #endif
-#else //Single Thread
+#else /* Single Thread */
 
      /* Inform active threads*/
     status = Cy_I2C_Write(FPGASLAVE_ADDR,DEVICE0_OFFSET+DEVICE_ACTIVE_TREAD_INFO_ADDRESS,1,
@@ -762,7 +767,7 @@ static cy_en_scb_i2c_status_t Cy_ConfigFpgaRegister (void)
     #endif
 #endif
 
-/* Update DMA buffer size used by Firmware */
+    /* Update DMA buffer size used by Firmware */
     status = Cy_I2C_Write(FPGASLAVE_ADDR,DEVICE0_OFFSET+DEVICE_BUFFER_SIZE_MSB_ADDRESS,CY_USB_GET_MSB(FPGA_DMA_BUFFER_SIZE),
                                       FPGA_I2C_ADDRESS_WIDTH,FPGA_I2C_DATA_WIDTH);
     ASSERT_NON_BLOCK(status == CY_SCB_I2C_SUCCESS, status);
@@ -829,7 +834,7 @@ static cy_en_scb_i2c_status_t Cy_ConfigFpgaRegister (void)
 * Return:
 *  0 for success, error code for unsuccess.
 ******************************************************************************/
-uint32_t Cy_UVC_SendVideoResolutionToFPGA (uint16_t width, uint16_t height)
+cy_en_scb_i2c_status_t Cy_UVC_SendVideoResolutionToFPGA (uint16_t width, uint16_t height)
 {
     cy_en_scb_i2c_status_t  status = CY_SCB_I2C_SUCCESS;
 
@@ -879,13 +884,19 @@ uint32_t Cy_UVC_SendVideoResolutionToFPGA (uint16_t width, uint16_t height)
 cy_en_scb_i2c_status_t Cy_FPGAPhyLnkTraining (void)
 {
     cy_en_scb_i2c_status_t  status = CY_SCB_I2C_SUCCESS;
-    /* write FPGA register to Disable format converstion */
 
+    /* write FPGA register to Disable format conversion */
     status = Cy_I2C_Write(FPGASLAVE_ADDR,DEVICE0_OFFSET+FPGA_DEVICE_STREAM_ENABLE_ADDRESS,CAMERA_APP_DISABLE,
                                               FPGA_I2C_ADDRESS_WIDTH,FPGA_I2C_DATA_WIDTH);
     DBG_APP_INFO("i2c status = 0x%x\n\r",status);
     Cy_SysLib_DelayUs(1000);
 #if LINK_TRAINING_EN
+    uint8_t lvds_phy_gear_ratio = cy_usb_get_lvds_phy_gear_ratio();
+    /* Inform Gearing ratio to the FPGA */
+    status = Cy_I2C_Write(FPGASLAVE_ADDR,FPGA_LVDS_GEAR_RATIO_ADDRESS,
+                            (uint8_t)pow(2.0, (double) lvds_phy_gear_ratio),
+                            FPGA_I2C_ADDRESS_WIDTH,FPGA_I2C_DATA_WIDTH);
+    ASSERT_NON_BLOCK(status == CY_SCB_I2C_SUCCESS, status);
 #if LVCMOS_DDR_EN
     status = Cy_I2C_Write(FPGASLAVE_ADDR,FPGA_PHY_LINK_CONTROL_ADDRESS,FPGA_LINK_CONTROL,
                                           FPGA_I2C_ADDRESS_WIDTH,FPGA_I2C_DATA_WIDTH);
@@ -899,11 +910,13 @@ cy_en_scb_i2c_status_t Cy_FPGAPhyLnkTraining (void)
 #endif
     Cy_SysLib_DelayUs(1000);
 
+    /* Send PHY Training patter byte to the FPGA */
     status = Cy_I2C_Write(FPGASLAVE_ADDR, FPGA_LVDS_PHY_TRAINING_ADDRESS, PHY_TRAINING_PATTERN_BYTE,
                            FPGA_I2C_ADDRESS_WIDTH, FPGA_I2C_DATA_WIDTH);
     ASSERT_NON_BLOCK(status == CY_SCB_I2C_SUCCESS, status);
     Cy_SysLib_DelayUs(1000);
 
+    /* Send LINK Training patter byte to the FPGA */
     status = Cy_I2C_Write(FPGASLAVE_ADDR,FPGA_LVDS_LINK_TRAINING_BLK_P0_ADDRESS,CY_USB_DWORD_GET_BYTE0(LINK_TRAINING_PATTERN_BYTE),
                                           FPGA_I2C_ADDRESS_WIDTH,FPGA_I2C_DATA_WIDTH);
     DBG_APP_INFO("i2c status = 0x%x\n\r",status);
@@ -953,9 +966,9 @@ cy_en_scb_i2c_status_t Cy_FPGAPhyLnkTraining (void)
 * Return:
 *  0 for read success, error code for unsuccess.
 ******************************************************************************/
-uint32_t Cy_UVC_SetVideoResolution (uint32_t format_index, uint32_t resolution_index, cy_en_usb_speed_t devSpeed)
+cy_en_scb_i2c_status_t Cy_UVC_SetVideoResolution (uint32_t format_index, uint32_t resolution_index, cy_en_usb_speed_t devSpeed)
 {
-    uint32_t status = 0;
+    cy_en_scb_i2c_status_t status = 0;
     uint8_t regValue = 0;
     DBG_APP_INFO("format_index %d resolution_index %d devSpeed = %d\r\n",  format_index,resolution_index, devSpeed);
     if(devSpeed >= CY_USBD_USB_DEV_SS_GEN1)
@@ -975,6 +988,10 @@ uint32_t Cy_UVC_SetVideoResolution (uint32_t format_index, uint32_t resolution_i
             }
             if (glIsSensorConfigured)
             {
+                /*Stream video from MIPI Source*/
+                status = Cy_I2C_Write(FPGASLAVE_ADDR,DEVICE0_OFFSET+DEVICE_SOURCE_TYPE_ADDRESS, MIPI_SOURCE,
+                                          FPGA_I2C_ADDRESS_WIDTH,FPGA_I2C_DATA_WIDTH);
+                ASSERT_NON_BLOCK(status == CY_SCB_I2C_SUCCESS, status);
                 #if SONY_IMX715_EN
                 status = Cy_ImageSensorSetResolution(3840,  2160);
                 if(status)
@@ -985,30 +1002,58 @@ uint32_t Cy_UVC_SetVideoResolution (uint32_t format_index, uint32_t resolution_i
                 cy_ImageSensorInitTHine(SENSOR_SLAVE_ADDR);
                 #endif
             }
+            else
+            {
+                /*Stream colorbar in case image sensor is not configured */
+                status = Cy_I2C_Write(FPGASLAVE_ADDR,DEVICE0_OFFSET+DEVICE_SOURCE_TYPE_ADDRESS,INTERNAL_COLORBAR,
+                                          FPGA_I2C_ADDRESS_WIDTH,FPGA_I2C_DATA_WIDTH);
+                ASSERT_NON_BLOCK(status == CY_SCB_I2C_SUCCESS, status);
+
+            }
             status = Cy_UVC_SendVideoResolutionToFPGA (3840,  2160);
             break;
 
         case CY_USB_UVC_SS_1080P_FRAME_INDEX:
             if (glIsSensorConfigured)
             {
+                /*Stream video from MIPI Source*/
+                status = Cy_I2C_Write(FPGASLAVE_ADDR,DEVICE0_OFFSET+DEVICE_SOURCE_TYPE_ADDRESS,MIPI_SOURCE,
+                                          FPGA_I2C_ADDRESS_WIDTH,FPGA_I2C_DATA_WIDTH);
+                ASSERT_NON_BLOCK(status == CY_SCB_I2C_SUCCESS, status);
                 #if SONY_IMX715_EN
-                status = Cy_ImageSensorSetResolution(1920,  1080); //Sensor configuration is available in cy_imagesensir.c
+                status = Cy_ImageSensorSetResolution(1920,  1080); /* Sensor configuration defined in cy_imagesensir.c */
                 ASSERT_NON_BLOCK(0 == status,status);
                 #endif
+            }
+            else
+            {
+                /*Stream colorbar in case image sensor is not configured */
+                status = Cy_I2C_Write(FPGASLAVE_ADDR,DEVICE0_OFFSET+DEVICE_SOURCE_TYPE_ADDRESS,INTERNAL_COLORBAR,
+                                          FPGA_I2C_ADDRESS_WIDTH,FPGA_I2C_DATA_WIDTH);
+                ASSERT_NON_BLOCK(status == CY_SCB_I2C_SUCCESS, status);
             }
             status = Cy_UVC_SendVideoResolutionToFPGA (1920,  1080);
             break;
 
         case CY_USB_UVC_SS_720P_FRAME_INDEX:
             /* status = Cy_ImageSensorSetResolution(1280,  720); */
-            if(status)
-            DBG_APP_ERR("Error I2C write with Sensor\r\n");
-            status = Cy_UVC_SendVideoResolutionToFPGA (1280,  720);
+            /*if(status)
+                DBG_APP_ERR("Error I2C write with Sensor\r\n");*/
+                /*Stream colorbar in case image sensor is not configured */
+                status = Cy_I2C_Write(FPGASLAVE_ADDR,DEVICE0_OFFSET+DEVICE_SOURCE_TYPE_ADDRESS,INTERNAL_COLORBAR,
+                                          FPGA_I2C_ADDRESS_WIDTH,FPGA_I2C_DATA_WIDTH);
+                ASSERT_NON_BLOCK(status == CY_SCB_I2C_SUCCESS, status);
+                status = Cy_UVC_SendVideoResolutionToFPGA (1280,  720);
+                ASSERT_NON_BLOCK(status == CY_SCB_I2C_SUCCESS, status);
             break;
 
         case CY_USB_UVC_SS_VGA_FRAME_INDEX:
             /* CyImageSensorSetResolution(640,  480); */
-            status = Cy_UVC_SendVideoResolutionToFPGA (640,  480);
+                status = Cy_I2C_Write(FPGASLAVE_ADDR,DEVICE0_OFFSET+DEVICE_SOURCE_TYPE_ADDRESS,INTERNAL_COLORBAR,
+                                          FPGA_I2C_ADDRESS_WIDTH,FPGA_I2C_DATA_WIDTH);
+                ASSERT_NON_BLOCK(status == CY_SCB_I2C_SUCCESS, status);
+                status = Cy_UVC_SendVideoResolutionToFPGA (640,  480);
+                ASSERT_NON_BLOCK(status == CY_SCB_I2C_SUCCESS, status);
             break;
 
         default:
@@ -1020,7 +1065,12 @@ uint32_t Cy_UVC_SetVideoResolution (uint32_t format_index, uint32_t resolution_i
         switch(resolution_index)
         {
             case CY_USB_UVC_HS_VGA_FRAME_INDEX:
-            status = Cy_UVC_SendVideoResolutionToFPGA (640,  480);
+                /*Stream colorbar in case image sensor is not configured */
+                status = Cy_I2C_Write(FPGASLAVE_ADDR,DEVICE0_OFFSET+DEVICE_SOURCE_TYPE_ADDRESS,INTERNAL_COLORBAR,
+                                          FPGA_I2C_ADDRESS_WIDTH,FPGA_I2C_DATA_WIDTH);
+                ASSERT_NON_BLOCK(status == CY_SCB_I2C_SUCCESS, status);
+                status = Cy_UVC_SendVideoResolutionToFPGA (640,  480);
+                ASSERT_NON_BLOCK(status == CY_SCB_I2C_SUCCESS, status);
             break;
         }
     }
@@ -1076,24 +1126,9 @@ void Cy_UVC_FpgaStatusCheck(cy_stc_usb_app_ctxt_t *pAppCtxt)
     }
     #endif
 #endif
-    if (PrintLinkTrainInfo)
+    if (pAppCtxt->printStartupMessage)
     {
-        PrintLinkTrainInfo = false;
-        #if (LVCMOS_EN && LVCMOS_DDR_EN && WL_EN)
-            LOG_COLOR("LINK_TRAINING_PATTERN_BYTE = 0x%x\n\r",LINK_TRAINING_PATTERN_BYTE);
-            LOG_COLOR("PhyTraining=%s, Link0Training=%s, Link1Training=%s: FPGA%sConfigured \n\r", "NA" , \
-            (glIsLVDSLink0TrainingDone?"PASS":"FAIL"),(glIsLVDSLink1TrainingDone?"PASS":"FAIL"), (glIsFPGAConfigured?"-":"-Not"));
-        #elif (LVCMOS_EN && (!LVCMOS_DDR_EN || PORT1_EN || !WL_EN)) /* LVCMOS SDR, and LVCMOS DDR P0,P1 NL */
-            LOG_COLOR("PhyTraining=%s, Link0Training=%s, Link1Training=%s: FPGA%sConfigured \n\r", "NA", "NA","NA", (glIsFPGAConfigured?"-":"-Not"));
-        #elif(!LVCMOS_EN) /* LVDS */
-        LOG_COLOR("PhyTraining=%s, Link0Training=%s, Link1Training=%s: FPGA%sConfigured \n\r", (glIsLVDSPhyTrainingDone&1?"PASS":"FAIL")\
-        ,(glIsLVDSLink0TrainingDone?"PASS":"FAIL"),(glIsLVDSLink1TrainingDone?"PASS":"FAIL"), (glIsFPGAConfigured?"-":"-Not"));
-        LOG_COLOR("PHY_TRAINING_PATTERN_BYTE = 0x%x\n\r",PHY_TRAINING_PATTERN_BYTE);
-        LOG_COLOR("LINK_TRAINING_PATTERN_BYTE = 0x%x\n\r",LINK_TRAINING_PATTERN_BYTE);
-        #endif
-
-        vTaskDelay(1);
-        xMsg.type = CY_USB_FS_PORT_STATUS_EVENT;
+        xMsg.type = CY_USB_STARTUP_PRINT_EVENT;
         status = xQueueSendFromISR(pAppCtxt->uvcMsgQueue, &(xMsg), &(xHigherPriorityTaskWoken));
         ASSERT_NON_BLOCK(pdTRUE == status,status);
     }
@@ -1202,25 +1237,19 @@ static void Cy_UVC_AppStop(cy_stc_usb_app_ctxt_t *pAppCtxt,
     ASSERT_NON_BLOCK(CY_HBDMA_MGR_SUCCESS == status,status);
 
     cy_uvc_IsApplnActive = false;
-    DBG_APP_INFO("UVC1 DMA Reset and Variable CLeared\r\n");
+    DBG_APP_INFO("UVC DMA Reset and Variable Cleared\r\n");
 
     /* On USB 2.0 connection, reset the DataWire channel used to send data to the EPM. */
     if (pAppCtxt->devSpeed <= CY_USBD_USB_DEV_HS)
     {
         Cy_USBHS_App_ResetEpDma(&(pAppCtxt->endpInDma[epNumber]));
-        if((MXS40USBHSDEV_USBHSDEV->EEPM_DEBUG_ENDPOINT[epNumber] & USBHSDEV_EEPM_DEBUG_ENDPOINT_EGRS_P_REQUESTS_Msk) != 0)
-        {
-            /* Flush and reset the endpoint and clear the STALL bit. */
-            Cy_USBD_FlushEndp(pUsbdCtxt, epNumber, CY_USB_ENDP_DIR_IN);
-        }
     }
     else if (pUsbdCtxt->devSpeed >= CY_USBD_USB_DEV_SS_GEN1)
     {
         Cy_USBSS_Cal_ClkStopOnEpRstEnable(pUsbdCtxt->pSsCalCtxt, true);
-        /* Flush and reset the endpoint and clear the STALL bit. */
-        Cy_USBD_FlushEndp(pUsbdCtxt, epNumber, CY_USB_ENDP_DIR_IN);
     }
 
+    Cy_USBD_FlushEndp(pUsbdCtxt, epNumber, CY_USB_ENDP_DIR_IN);
     Cy_USBD_ResetEndp(pUsbdCtxt, epNumber, CY_USB_ENDP_DIR_IN, false);
     Cy_USB_USBD_EndpSetClearStall(pUsbdCtxt, epNumber, CY_USB_ENDP_DIR_IN, false);
 
@@ -1260,6 +1289,8 @@ static void Cy_UVC_AppStart(cy_stc_usb_app_ctxt_t *pAppCtxt,
     {
         mgrStatus = Cy_HBDma_Channel_Enable(pAppCtxt->hbBulkInChannel, 0);
         ASSERT_NON_BLOCK(mgrStatus == CY_HBDMA_MGR_SUCCESS, mgrStatus);
+        if (pAppCtxt->devSpeed <= CY_USBD_USB_DEV_HS && AUTO_DMA_CHANNEL)
+            DBG_APP_ERR("Switch to SuperSpeed USB Port and Cable, or use manual DMA configuration in HS \r\n");
     }
 
     pAppCtxt->glfps                  = 0;
@@ -1276,7 +1307,7 @@ static void Cy_UVC_AppStart(cy_stc_usb_app_ctxt_t *pAppCtxt,
     pAppCtxt->glPartialBufSize       = 0;
 
     Cy_UVC_StreamStartStop(STOP);
-    if (Cy_UVC_SetVideoResolution(format_index, frame_index, pAppCtxt->devSpeed) != 0)
+    if (Cy_UVC_SetVideoResolution(format_index, frame_index, pAppCtxt->devSpeed) != CY_SCB_I2C_SUCCESS)
     {
         DBG_APP_ERR("Error Sending Resolution\r\n");
     }
@@ -1301,23 +1332,6 @@ static void Cy_UVC_AppStart(cy_stc_usb_app_ctxt_t *pAppCtxt,
  */
 void Cy_USB_AppDisableEndpDma (cy_stc_usb_app_ctxt_t *pAppCtxt)
 {
-    uint8_t i;
-
-    /* On USB 2.x connections, make sure the DataWire channels are disabled and reset. */
-    if (pAppCtxt->devSpeed <= CY_USBD_USB_DEV_HS) {
-        for (i = 1; i < CY_USB_MAX_ENDP_NUMBER; i++) {
-            if (pAppCtxt->endpInDma[i].valid) {
-                /* DeInit the DMA channel and disconnect the triggers. */
-                Cy_USBHS_App_DisableEpDmaSet(&(pAppCtxt->endpInDma[i]));
-            }
-
-            if (pAppCtxt->endpOutDma[i].valid) {
-                /* DeInit the DMA channel and disconnect the triggers. */
-                Cy_USBHS_App_DisableEpDmaSet(&(pAppCtxt->endpOutDma[i]));
-            }
-        }
-    }
-
     /* Disable and destroy the High BandWidth DMA channels. */
     if (pAppCtxt->hbBulkInChannel != NULL) {
         Cy_HBDma_Channel_Disable(pAppCtxt->hbBulkInChannel);
@@ -1393,34 +1407,13 @@ void Cy_UVC_AppSetCurRqtHandler (cy_stc_usb_app_ctxt_t *pAppCtxt, uint16_t wLeng
         cy_uvc_buffer_counter = 1;
         if (pAppCtxt->devSpeed > CY_USBD_USB_DEV_HS)
         {
-#if PARTIAL_FRAME_EN
             /* Copy the relevant settings from the host provided data into the
                active data structure. */
             if (cy_uvc_currentFrameIndex == CY_USB_UVC_SS_4K_FRAME_INDEX)
             {
                 memcpy(&cy_uvc_probectrl_4K[2], &cy_uvc_commitctrl[2], CY_USB_UVC_PROBE_CONTROL_UPDATE_SIZE);
-            }
-            else if (cy_uvc_currentFrameIndex == CY_USB_UVC_SS_1080P_FRAME_INDEX)
-            {
-                memcpy(&cy_uvc_probectrl_1080p[2], &cy_uvc_commitctrl[2], CY_USB_UVC_PROBE_CONTROL_UPDATE_SIZE);
-            }
-            else if (cy_uvc_currentFrameIndex == CY_USB_UVC_SS_720P_FRAME_INDEX)
-            {
-                memcpy(&cy_uvc_probectrl_720p[2], &cy_uvc_commitctrl[2], CY_USB_UVC_PROBE_CONTROL_UPDATE_SIZE);
-            }
-            else if (cy_uvc_currentFrameIndex == CY_USB_UVC_SS_VGA_FRAME_INDEX)
-            {
-                memcpy(&cy_uvc_probectrl_VGA[2], &cy_uvc_commitctrl[2], CY_USB_UVC_PROBE_CONTROL_UPDATE_SIZE);
-            }
-
-#else //PARTIAL_FRAME_EN (FULL BUFFER)
-            /* Copy the relevant settings from the host provided data into the
-               active data structure. */
-            if (cy_uvc_currentFrameIndex == CY_USB_UVC_SS_720P_FRAME_INDEX)
-            {
-                memcpy(&cy_uvc_probectrl_720p[2], &cy_uvc_commitctrl[2], CY_USB_UVC_PROBE_CONTROL_UPDATE_SIZE);
-                cy_usb_full_buffer_no = CY_USB_FULL_BUFFER_NO_1280_720;
-                cy_usb_no_bytes_last_buffer = CY_USB_NO_BYTE_LAST_BUFFER_1280_720;
+                cy_usb_full_buffer_no = CY_USB_FULL_BUFFER_NO_3840_2160;
+                cy_usb_no_bytes_last_buffer = CY_USB_NO_BYTE_LAST_BUFFER_3840_2160;
             }
             else if (cy_uvc_currentFrameIndex == CY_USB_UVC_SS_1080P_FRAME_INDEX)
             {
@@ -1428,24 +1421,25 @@ void Cy_UVC_AppSetCurRqtHandler (cy_stc_usb_app_ctxt_t *pAppCtxt, uint16_t wLeng
                 cy_usb_full_buffer_no = CY_USB_FULL_BUFFER_NO_1920_1080;
                 cy_usb_no_bytes_last_buffer = CY_USB_NO_BYTE_LAST_BUFFER_1920_1080;
             }
+            else if (cy_uvc_currentFrameIndex == CY_USB_UVC_SS_720P_FRAME_INDEX)
+            {
+                memcpy(&cy_uvc_probectrl_720p[2], &cy_uvc_commitctrl[2], CY_USB_UVC_PROBE_CONTROL_UPDATE_SIZE);
+                cy_usb_full_buffer_no = CY_USB_FULL_BUFFER_NO_1280_720;
+                cy_usb_no_bytes_last_buffer = CY_USB_NO_BYTE_LAST_BUFFER_1280_720;
+            }
             else if (cy_uvc_currentFrameIndex == CY_USB_UVC_SS_VGA_FRAME_INDEX)
             {
                 memcpy(&cy_uvc_probectrl_VGA[2], &cy_uvc_commitctrl[2], CY_USB_UVC_PROBE_CONTROL_UPDATE_SIZE);
                 cy_usb_full_buffer_no = CY_USB_FULL_BUFFER_NO_640_480;
                 cy_usb_no_bytes_last_buffer = CY_USB_NO_BYTE_LAST_BUFFER_640_480;
             }
-            else if (cy_uvc_currentFrameIndex == CY_USB_UVC_SS_4K_FRAME_INDEX)
-            {
-                memcpy(&cy_uvc_probectrl_4K[2], &cy_uvc_commitctrl[2], CY_USB_UVC_PROBE_CONTROL_UPDATE_SIZE);
-                cy_usb_full_buffer_no = CY_USB_FULL_BUFFER_NO_3840_2160;
-                cy_usb_no_bytes_last_buffer = CY_USB_NO_BYTE_LAST_BUFFER_3840_2160;
-            }
-#endif
             else
             {
                 DBG_APP_ERR("Error FrameIndex\r\n");
                 cy_uvc_currentFrameIndex = CY_USB_UVC_SS_4K_FRAME_INDEX;
             }
+            DBG_APP_INFO("cy_usb_full_buffer_no%d\r\n",cy_usb_full_buffer_no);
+            DBG_APP_INFO("cy_usb_no_bytes_last_buffer%d \r\n",cy_usb_no_bytes_last_buffer);
         }
         else /* HS speed */
         {
@@ -1454,6 +1448,15 @@ void Cy_UVC_AppSetCurRqtHandler (cy_stc_usb_app_ctxt_t *pAppCtxt, uint16_t wLeng
                 memcpy(&cy_uvc_probectrl_HS_VGA[2], &cy_uvc_commitctrl[2], CY_USB_UVC_PROBE_CONTROL_UPDATE_SIZE);
                 cy_usb_full_buffer_no = CY_USB_FULL_BUFFER_NO_640_480;
                 cy_usb_no_bytes_last_buffer = CY_USB_NO_BYTE_LAST_BUFFER_640_480;
+
+                #if (AUTO_DMA_CHANNEL)
+                cy_uvc_probectrl_HS_VGA[22] = CY_USB_DWORD_GET_BYTE0(CY_USB_UVC_STREAM_BUF_SIZE_HS);
+                cy_uvc_probectrl_HS_VGA[23] = CY_USB_DWORD_GET_BYTE1(CY_USB_UVC_STREAM_BUF_SIZE_HS);
+                cy_uvc_probectrl_HS_VGA[24] = CY_USB_DWORD_GET_BYTE2(CY_USB_UVC_STREAM_BUF_SIZE_HS);
+                cy_uvc_probectrl_HS_VGA[25] = CY_USB_DWORD_GET_BYTE3(CY_USB_UVC_STREAM_BUF_SIZE_HS);
+                cy_usb_full_buffer_no = CY_USB_FULL_BUFFER_NO_640_480_HS;
+                cy_usb_no_bytes_last_buffer = CY_USB_NO_BYTE_LAST_BUFFER_640_480_HS;
+                #endif
             }
             else
             {
@@ -1493,15 +1496,17 @@ void Cy_UVC_AppDeviceTaskHandler(void *pTaskParam)
 {
     cy_stc_usb_app_ctxt_t *pAppCtxt = (cy_stc_usb_app_ctxt_t *)pTaskParam;
     cy_stc_usbd_app_msg_t queueMsg;
+    cy_en_scb_i2c_status_t i2cStatus;
     BaseType_t xStatus;
     uint32_t *pUsbEvtLogBuf;
     uint16_t wIndex;
+    uint32_t dpslpcnt;
+    bool IsDeepSlpExit;
 
     /* Reset Frame Id in UVC Header */
     cy_uvc_header_[1] = CY_USB_UVC_HEADER_DEFAULT_BFH;
     DBG_APP_INFO("UvcDeviceThreadCreated\r\n");
-    // Cy_SysLib_Delay(5000); //5Sec delay for debugging ti180 FPGA 
-    // vTaskDelay(10000);
+
 #if FPGA_ENABLE
     Cy_FPGAConfigPins(pAppCtxt,FPGA_CONFIG_MODE);
     Cy_QSPI_Start(pAppCtxt,&HBW_BufMgr);
@@ -1565,7 +1570,7 @@ void Cy_UVC_AppDeviceTaskHandler(void *pTaskParam)
     }
 
     for(uint32_t count = 0; count < 200; count++)
-        Cy_SysLib_DelayUs(1000);//Delay 200ms
+        Cy_SysLib_DelayUs(1000);/* Delay 200ms needed for Sony IMX715 */
 #elif THINE_EN
     cy_ImageSensorInitTHine(SENSOR_SLAVE_ADDR);
     if(glIsSensorConfigured)
@@ -1574,86 +1579,100 @@ void Cy_UVC_AppDeviceTaskHandler(void *pTaskParam)
         DBG_APP_INFO("Failed to configured Thine Image senor via I2C \n\r");
 #endif
     xTimerStart( pAppCtxt->FpgaStatusTimer, 0 );
+    appCtxt.printStartupMessage = true;
     for (;;)
     {
+        /* Check if the USB3 link has gone into U3.
+         * If yes, initiate L3 entry for LVDS link if LVDS_LOW_POWER_EN is set (1).
+         * Then put the device into deep sleep and wait for USB wakeup interrupt.
+         * On wakeup, inform the FPGA to exit from L3.
+         */
+        if (pAppCtxt->devSpeed > CY_USBD_USB_DEV_HS)
+        {
+            if (Cy_USBD_GetUSBPowerState(pAppCtxt->pUsbdCtxt) == CY_USBD_USBSS_LINK_U3)
+            {
+                dpslpcnt = 500;
+                do {
+                        Cy_SysLib_Delay(1);
+                        dpslpcnt--;
+                    } while ((Cy_USBD_GetUSBPowerState(pAppCtxt->pUsbdCtxt) == CY_USBD_USBSS_LINK_U3) && (dpslpcnt > 0));
+                if (Cy_USBD_GetUSBPowerState(pAppCtxt->pUsbdCtxt) == CY_USBD_USBSS_LINK_U3)
+                {
+                    pAppCtxt->devState = CY_USB_DEVICE_STATE_SUSPEND;
+#if DEEPSLEEP_EN
+                    queueMsg.type = CY_USB_ENTER_DEEPSLEEP;
+                    xQueueSend( pAppCtxt->uvcMsgQueue, &queueMsg, 0 );
+#endif
+                }
+            }
+        }
         /*
          * Wait until some data is received from the queue.
-         * Timeout after 100 ms.
+         * Timeout after 50 ms.
          */
-        if(pAppCtxt->glPrintFlag)
-        {
-            pAppCtxt->glPrintFlag = 0;
-            DBG_APP_INFO("Prod=%d Cons=%d Prtl_Sz=%d Frm_Sz=%dB\n\r",
-            pAppCtxt->glProdCount, pAppCtxt->glConsCount, pAppCtxt->glPartialBufSize, pAppCtxt->glFrameSize);
-        }
-
-        xStatus = xQueueReceive(pAppCtxt->uvcMsgQueue, &queueMsg, 20);
+        xStatus = xQueueReceive(pAppCtxt->uvcMsgQueue, &queueMsg, 50);
         if (xStatus != pdPASS) {
             continue;
         }
 
         switch (queueMsg.type)
         {
-        case CY_USB_UVC_VBUS_CHANGE_INTR:
-            /* Start the debounce timer. */
-            xTimerStart(pAppCtxt->vbusDebounceTimer, 0);
-            break;
+            case CY_USB_UVC_VBUS_CHANGE_INTR:
+                /* Start the debounce timer. */
+                xTimerStart(pAppCtxt->vbusDebounceTimer, 0);
+                break;
 
-        case CY_USB_UVC_VBUS_CHANGE_DEBOUNCED:
-            /* Check whether VBus state has changed. */
-            pAppCtxt->vbusPresent = (Cy_GPIO_Read(VBUS_DETECT_GPIO_PORT, VBUS_DETECT_GPIO_PIN) == VBUS_DETECT_STATE);
+            case CY_USB_UVC_VBUS_CHANGE_DEBOUNCED:
+                /* Check whether VBus state has changed. */
+                pAppCtxt->vbusPresent = (Cy_GPIO_Read(VBUS_DETECT_GPIO_PORT, VBUS_DETECT_GPIO_PIN) == VBUS_DETECT_STATE);
 
-            if (pAppCtxt->vbusPresent)
-            {
-                if (!pAppCtxt->usbConnected)
+                if (pAppCtxt->vbusPresent)
                 {
-                    DBG_APP_INFO("Enabling USB connection due to VBus detect\r\n");
-                    Cy_USB_SSConnectionEnable(pAppCtxt);
+                    if (!pAppCtxt->usbConnected)
+                    {
+                        DBG_APP_INFO("Enabling USB connection due to VBus detect\r\n");
+                        Cy_USB_SSConnectionEnable(pAppCtxt);
+                    }
                 }
-            }
-            else
-            {
-                if (pAppCtxt->usbConnected)
+                else
                 {
-                    Cy_USB_AppDisableEndpDma(pAppCtxt);
-                    DBG_APP_INFO("Disabling USB connection due to VBus removal\r\n");
-                    Cy_USB_SSConnectionDisable(pAppCtxt);
+                    if (pAppCtxt->usbConnected)
+                    {
+                        Cy_USB_AppDisableEndpDma(pAppCtxt);
+                        DBG_APP_INFO("Disabling USB connection due to VBus removal\r\n");
+                        Cy_USB_SSConnectionDisable(pAppCtxt);
+                    }
                 }
-            }
-            break;
+                break;
 
-        case FX10_PRINT_FRAME_INFO_EVENT:
-        {
-            pAppCtxt->glPrintFlag = 0;
-            DBG_APP_INFO("Prod=%d Cons=%d Prtl_Sz=%d Frm_Sz=%dB\n\r",
-            pAppCtxt->glProdCount, pAppCtxt->glConsCount, pAppCtxt->glPartialBufSize, pAppCtxt->glFrameSize);
-            break;
-        }
+            case FX_PRINT_FRAME_INFO_EVENT:
+                pAppCtxt->glPrintFlag = 0;
+                DBG_APP_INFO("Prod=%d Cons=%d Prtl_Sz=%d Frm_Sz=%dB\n\r",
+                pAppCtxt->glProdCount, pAppCtxt->glConsCount, pAppCtxt->glPartialBufSize, pAppCtxt->glFrameSize);
+                break;
 
-        case FX10_PRINT_FPS_EVENT :
-        {
-            if(pAppCtxt->glfps)
-            {
-                DBG_APP_INFO("UVC fps = %d\n\r",pAppCtxt->glfps);
-                pAppCtxt->glfps = 0;
-            }
-            break;
-        }
+            case FX_PRINT_FPS_EVENT :
+                if(pAppCtxt->glfps)
+                {
+                    Cy_Debug_AddToLog(2, "UVC fps = %d\n\r",pAppCtxt->glfps);
+                    pAppCtxt->glfps = 0;
+                }
+                break;
 
-        case CY_USB_UVC_VIDEO_STREAMING_START:
-            break;
+            case CY_USB_UVC_VIDEO_STREAM_START_EVENT:
+                break;
 
-        case CY_USB_UVC_DEVICE_VIDIO_CNTRL_RQT:
-            DBG_APP_INFO("queueMsg.data[0] = %d\r\n",queueMsg.data[0]);
-            xStatus  = Cy_VideoControlHandleVCInterfaceRequest(pAppCtxt, queueMsg.data[0]);
-            ASSERT_NON_BLOCK(xStatus == CY_USBD_STATUS_SUCCESS, xStatus);
-            break;
+            case CY_USB_UVC_DEVICE_VIDEO_CNTRL_RQT_EVENT:
+                DBG_APP_INFO("queueMsg.data[0] = %d\r\n",queueMsg.data[0]);
+                xStatus  = Cy_VideoControlHandleVCInterfaceRequest(pAppCtxt, queueMsg.data[0]);
+                ASSERT_NON_BLOCK(xStatus == CY_USBD_STATUS_SUCCESS, xStatus);
+                break;
 
-        case CY_USB_UVC_DEVICE_SET_CUR_RQT:
-            DBG_APP_INFO("CY_USB_UVC_DEVICE_SET_CUR_RQT\r\n");
-            DBG_APP_INFO("queueMsg.data[0] = %d\r\n",queueMsg.data[0]);
-            Cy_UVC_AppSetCurRqtHandler(pAppCtxt, queueMsg.data[0], queueMsg.data[1]);
-            break;
+            case CY_USB_UVC_DEVICE_SET_CUR_RQT:
+                DBG_APP_INFO("CY_USB_UVC_DEVICE_SET_CUR_RQT\r\n");
+                DBG_APP_INFO("queueMsg.data[0] = %d\r\n",queueMsg.data[0]);
+                Cy_UVC_AppSetCurRqtHandler(pAppCtxt, queueMsg.data[0], queueMsg.data[1]);
+                break;
 
             case CY_USB_UVC_VIDEO_STREAM_STOP_EVENT:
                 DBG_APP_INFO("CY_USB_UVC_VIDEO_STREAM_STOP_EVENT\r\n");
@@ -1661,21 +1680,96 @@ void Cy_UVC_AppDeviceTaskHandler(void *pTaskParam)
                 Cy_UVC_AppStop(pAppCtxt,pAppCtxt->pUsbdCtxt, wIndex);
                 break;
 
-        case CY_USB_FS_PORT_STATUS_EVENT:
-            // if(appCtxt.usbFsPortActive && (!appCtxt.startupMessagesDone))
-            {
-                appCtxt.startupMessagesDone = true;
-                Cy_AppPrintStartupLogs();
-            }
-            break;
+            case CY_USB_STARTUP_PRINT_EVENT:
+                    appCtxt.printStartupMessage = false;
+                    Cy_AppPrintStartupLogs();
+                break;
 
-        case CY_USB_UVC_FPGA_STATUS_POLL_EVENT:
-            xTimerReset(pAppCtxt->FpgaStatusTimer,0);
-            Cy_UVC_FpgaStatusCheck(pAppCtxt);
-            break;
+            case CY_USB_UVC_FPGA_STATUS_POLL_EVENT:
+                xTimerReset(pAppCtxt->FpgaStatusTimer,0);
+                Cy_UVC_FpgaStatusCheck(pAppCtxt);
+                break;
 
-        default:
-            break;
+            case FX_DMA_RESET_EVENT:
+                /* No action taken */
+                break;
+
+            case CY_USB_ENTER_DEEPSLEEP:
+                if ((pAppCtxt->devState==CY_USB_DEVICE_STATE_SUSPEND) && (pAppCtxt->prevDevState==CY_USB_DEVICE_STATE_CONFIGURED))
+                    {
+                    if (pAppCtxt->devSpeed <= CY_USBD_USB_DEV_HS)
+                        {
+                            dpslpcnt = 500;
+                            do {
+                                Cy_SysLib_Delay(1);
+                                dpslpcnt--;
+                            } while ((pAppCtxt->devState == CY_USB_DEVICE_STATE_SUSPEND) && (dpslpcnt > 0));
+                        }
+                        if (pAppCtxt->devState == CY_USB_DEVICE_STATE_SUSPEND)
+                        {
+                            DBG_APP_INFO("Entering DeepDleep\r\n");
+                            Cy_SysLib_DelayUs(1500);
+                            Cy_UVC_StreamStartStop(STOP);
+#if LVDS_LOW_POWER_EN
+                            /* Signal the FPGA to initiate L3 Entry */
+                            i2cStatus = Cy_I2C_Write(FPGASLAVE_ADDR, FPGA_LOW_PWR_MODE_ADDRESS, LVDS_L3_MODE_ENTER,
+                                                       FPGA_I2C_ADDRESS_WIDTH,FPGA_I2C_DATA_WIDTH);
+                            ASSERT_NON_BLOCK(i2cStatus == CY_SCB_I2C_SUCCESS, i2cStatus);
+#endif
+                            IsDeepSlpExit = false;
+                            if (Cy_USBD_EnterDeepsleep(pAppCtxt->pUsbdCtxt, pAppCtxt->pCpuDw1Base) == CY_USBD_STATUS_SUCCESS)
+                            {
+                                LVCMOS_EN?DBG_APP_INFO("Woke up from deep sleep\r\n") :\
+                                          DBG_APP_INFO("Woke up from deep sleep, initiating phy/link re-training\r\n");
+
+                                pAppCtxt->prevDevState = CY_USB_DEVICE_STATE_CONFIGURED;
+                                pAppCtxt->devState = CY_USB_DEVICE_STATE_CONFIGURED;
+                                IsDeepSlpExit = true;
+                                #if USBFS_LOGS_ENABLE
+                                Cy_Debug_LogDeInit();
+                                Cy_Debug_LogInit(&dbgCfg);
+                            #endif /*USBFS_LOGS_ENABLE*/
+                            }
+                            else
+                            {
+                                LOG_ERROR("Failed to enter deep sleep mode\r\n");
+                            }
+
+#if LVDS_LOW_POWER_EN
+                            /* Clear training status before initiating low power exit to make the FPGA ready for retraining
+                             * Request for phy and link training
+                             */
+                            Cy_LVDS_PhyGpioClr(LVDSSS_LVDS, LINK_READY_CTL_PORT, LINK_READY_CTL_PIN);
+                            i2cStatus = Cy_I2C_Write(FPGASLAVE_ADDR, FPGA_PHY_LINK_CONTROL_ADDRESS, FPGA_PHY_CONTROL|FPGA_LINK_CONTROL,
+                                                        FPGA_I2C_ADDRESS_WIDTH, FPGA_I2C_DATA_WIDTH);
+                            ASSERT_NON_BLOCK(i2cStatus == CY_SCB_I2C_SUCCESS, i2cStatus);
+#endif
+
+                            i2cStatus = Cy_I2C_Write(FPGASLAVE_ADDR,FPGA_LOW_PWR_MODE_ADDRESS, LVDS_EXIT_LOWPOWER_MODE,
+                                                        FPGA_I2C_ADDRESS_WIDTH, FPGA_I2C_DATA_WIDTH);
+                            ASSERT_NON_BLOCK(i2cStatus == CY_SCB_I2C_SUCCESS, i2cStatus);
+                            if(LVCMOS_EN && IsDeepSlpExit)
+                            {
+                                Cy_LVDS_LVCMOS_Init();
+                                Cy_SysLib_Delay(1);
+                            }
+                        }
+                        else {
+                                DBG_APP_ERR("Failed to enter LVDS L3 state. Current state: %d\r\n", pAppCtxt->devState);
+                        }
+                    }
+                break;
+
+#if LVDS_LOW_POWER_EN
+            case CY_LVDS_RETRAIN:
+                /* Device has exited a LVDS Low power mode, rerun LVDS training.
+                 * At this stage, device applies the stored settings and reruns the training */
+                Cy_App_LvdsRetraining(pAppCtxt);
+                break;
+#endif /* LVDS_LOW_POWER_EN */
+
+            default:
+                break;
         } /* switch (queueMsg.type) */
     } /* for(;;) */
 } /* End of Cy_UVC_AppDeviceTaskHandler() */
@@ -1721,7 +1815,7 @@ void Cy_USB_VbusDebounceTimerCb (TimerHandle_t xTimer)
 * Parameters:
 * \param xTimer
 * timer handle
-* 
+*
 * Return:
 * void
 ************************************************************************************************/
@@ -1766,7 +1860,7 @@ void Cy_USB_FpgaStatusReadTimerCb (TimerHandle_t xTimer)
 }   /* End of Cy_USB_FpgaStatusReadTimerCb() */
 
 /******************************************************************************
-* Function Name: Cy_USB_AppInit(cy_stc_usb_app_ctxt_t *pAppCtxt, 
+* Function Name: Cy_USB_AppInit(cy_stc_usb_app_ctxt_t *pAppCtxt,
 *                               cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
                                 DMAC_Type *pCpuDmacBase, DW_Type *pCpuDw0Base,
                                 DW_Type *pCpuDw1Base,
@@ -1830,8 +1924,6 @@ void Cy_USB_AppInit(cy_stc_usb_app_ctxt_t *pAppCtxt,
     pAppCtxt->pCpuDw0Base = pCpuDw0Base;
     pAppCtxt->pCpuDw1Base = pCpuDw1Base;
     pAppCtxt->pUsbdCtxt = pUsbdCtxt;
-    pAppCtxt->uvcPendingBufCnt = 0;
-    pAppCtxt->uvcFlowCtrlFlag = false;
     pAppCtxt->glDmaBufCnt_prv = 0;
 
     /*
@@ -1899,8 +1991,6 @@ void Cy_USB_AppInit(cy_stc_usb_app_ctxt_t *pAppCtxt,
     }
     /* Zero out the EP0 test buffer. */
     memset((uint8_t *)Ep0TestBuffer, 0, sizeof(Ep0TestBuffer));
-
-    return;
 } /* End of Cy_USB_AppInit() */
 
 
@@ -1985,7 +2075,6 @@ void Cy_USB_AppRegisterCallback(cy_stc_usb_app_ctxt_t *pAppCtxt)
                              Cy_USB_AppSlpCallback);
     Cy_USBD_RegisterCallback(pUsbdCtxt, CY_USB_USBD_CB_SETADDR,
                              Cy_USB_AppSetAddressCallback);
-    return;
 } /* End of Cy_USB_AppRegisterCallback() */
 
 /******************************************************************************
@@ -2012,7 +2101,8 @@ static void Cy_UVC_AppHandleProduceEvent (
 {
     cy_en_hbdma_mgr_status_t   status;
     cy_stc_hbdma_buff_status_t buffStat;
-
+    cy_stc_usbd_app_msg_t xMsg;
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     /* Wait for a free buffer. */
     status = Cy_HBDma_Channel_GetBuffer(pChHandle, &buffStat);
     if (status != CY_HBDMA_MGR_SUCCESS)
@@ -2023,158 +2113,70 @@ static void Cy_UVC_AppHandleProduceEvent (
 
     pUsbApp->glDmaBufCnt = buffStat.count;
     pUsbApp->glFrameSizeTransferred += pUsbApp->glDmaBufCnt;
+    cy_uvc_commitLength = buffStat.count + CY_USB_UVC_MAX_HEADER;
+
+
 #if PARTIAL_FRAME_EN
-    if (buffStat.count < FPGA_DMA_BUFFER_SIZE) //End of Frame detected ?
-    {
-        // buffStat.count -= 32;
-        pUsbApp->glDmaBufCnt = buffStat.count;
-        /* Short packet: End of frame. */
-        #if UVC_HEADER_BY_FX20
-        Cy_UVC_AddHeader(buffStat.pBuffer - CY_USB_UVC_MAX_HEADER, CY_USB_UVC_HEADER_EOF);
-        #endif
-        pUsbApp->glFrameSize = pUsbApp->glFrameSizeTransferred;
-        pUsbApp->glFrameSizeTransferred = 0;
-        pUsbApp->glFrameCount++;
-        pUsbApp->glPartialBufSize = buffStat.count;
-        pUsbApp->glConsCount = pUsbApp->glCons;
-        pUsbApp->glProdCount = pUsbApp->glProd;
-        pUsbApp->glPrintFlag = 1;
-        pUsbApp->glCons = 0;
-        pUsbApp->glProd = 0;
-    }
-    else //Not End of frame, add UVC header and send it UIB
-    {
-        /* Not the end of frame. */
-        #if UVC_HEADER_BY_FX20
-        Cy_UVC_AddHeader(buffStat.pBuffer - CY_USB_UVC_MAX_HEADER, CY_USB_UVC_HEADER_FRAME);
-        #endif
-    }
-    if(!buffStat.count)
-    {
-        status = Cy_HBDma_Channel_DiscardBuffer(pChHandle, &buffStat);
-        return;
-    }
-    #if UVC_HEADER_BY_FX20
-    /* Commit the buffer for transfer */
-    buffStat.count = buffStat.count + CY_USB_UVC_MAX_HEADER;
-    buffStat.size = ((buffStat.count + CY_USB_UVC_MAX_HEADER + 15)&0xFFF0);
-    buffStat.pBuffer = buffStat.pBuffer - CY_USB_UVC_MAX_HEADER;
-    #endif
-#else // Full buffer method
-    if (cy_uvc_buffer_counter <= cy_usb_full_buffer_no)
-    {
-        /* Not the end of frame. */
-        #if UVC_HEADER_BY_FX20
-        Cy_UVC_AddHeader(buffStat.pBuffer - CY_USB_UVC_MAX_HEADER, CY_USB_UVC_HEADER_FRAME);
-        #endif
-        cy_uvc_buffer_counter++;
-        cy_uvc_commitLength = CY_USB_UVC_STREAM_BUF_SIZE;
-    }
-    else
-    {
-        /* Short packet: End of frame. */
-        #if UVC_HEADER_BY_FX20
-        Cy_UVC_AddHeader(buffStat.pBuffer - CY_USB_UVC_MAX_HEADER, CY_USB_UVC_HEADER_EOF);
-        #endif
-        cy_uvc_commitLength = cy_usb_no_bytes_last_buffer + CY_USB_UVC_MAX_HEADER;
-        cy_uvc_buffer_counter = 1;
-
-        pUsbApp->glFrameSize = pUsbApp->glFrameSizeTransferred;
-        pUsbApp->glFrameSizeTransferred = 0;
-        pUsbApp->glFrameCount++;
-        pUsbApp->glPartialBufSize = buffStat.count;
-        pUsbApp->glConsCount = pUsbApp->glCons;
-        pUsbApp->glProdCount = pUsbApp->glProd;
-        pUsbApp->glPrintFlag = 1;
-        pUsbApp->glCons = 0;
-        pUsbApp->glProd = 0;
-    }
-
-    if(!buffStat.count)
-    {
-        status = Cy_HBDma_Channel_DiscardBuffer(pChHandle, &buffStat);
-        return;
-    }
-    #if UVC_HEADER_BY_FX20
-    /* Commit the buffer for transfer */
-    buffStat.count   = cy_uvc_commitLength;
-    buffStat.size    = (cy_uvc_commitLength + 15) & 0xFFF0; // Round size up to a multiple of 16 bytes.
-
-    // buffStat.count = buffStat.count + CY_USB_UVC_MAX_HEADER;
-    // buffStat.size = ((buffStat.count + CY_USB_UVC_MAX_HEADER + 15)&0xFFF0);
-
-    buffStat.pBuffer = buffStat.pBuffer - CY_USB_UVC_MAX_HEADER;
-    #endif
+    if (((buffStat.count == pUsbApp->glDmaProdBufSize) && (pUsbApp->devSpeed > CY_USBD_USB_DEV_HS)) || \
+        (cy_uvc_buffer_counter <= cy_usb_full_buffer_no)) /* Not End of frame, add UVC header and send it UIB */
+#else
+    if(cy_uvc_buffer_counter <= cy_usb_full_buffer_no) /* Not End of frame, add UVC header and send it UIB */
 #endif
+    {
+        /* Not the end of frame. */
+        if (UVC_HEADER_BY_FX20 || (pUsbApp->devSpeed <= CY_USBD_USB_DEV_HS))
+            Cy_UVC_AddHeader(buffStat.pBuffer - CY_USB_UVC_MAX_HEADER, CY_USB_UVC_HEADER_FRAME);
+
+        cy_uvc_buffer_counter++;
+    }
+    else /* End of Frame detected ? */
+    {
+        /* Short packet: End of frame. */
+        if (UVC_HEADER_BY_FX20 || pUsbApp->devSpeed <= CY_USBD_USB_DEV_HS)
+            Cy_UVC_AddHeader(buffStat.pBuffer - CY_USB_UVC_MAX_HEADER, CY_USB_UVC_HEADER_EOF);
+
+        cy_uvc_buffer_counter = 1;
+        pUsbApp->glFrameSize = pUsbApp->glFrameSizeTransferred;
+        pUsbApp->glFrameSizeTransferred = 0;
+        pUsbApp->glFrameCount++;
+        pUsbApp->glPartialBufSize = buffStat.count;
+        pUsbApp->glConsCount = pUsbApp->glCons;
+        pUsbApp->glProdCount = pUsbApp->glProd;
+        pUsbApp->glPrintFlag = 1;
+        pUsbApp->glCons = 0;
+        pUsbApp->glProd = 0;
+        xMsg.type = FX_PRINT_FRAME_INFO_EVENT;
+        status = xQueueSendFromISR(pUsbApp->uvcMsgQueue, &(xMsg), &(xHigherPriorityTaskWoken));
+        ASSERT_NON_BLOCK(pdTRUE == status,status);
+    }
+
+    if(!buffStat.count)
+    {
+        status = Cy_HBDma_Channel_DiscardBuffer(pChHandle, &buffStat);
+        return;
+    }
+    if (UVC_HEADER_BY_FX20 || (pUsbApp->devSpeed <= CY_USBD_USB_DEV_HS))
+    {
+        /* Commit the buffer for transfer */
+        buffStat.count = cy_uvc_commitLength;
+        buffStat.size = (cy_uvc_commitLength + 15)&0xFFF0;
+        buffStat.pBuffer = buffStat.pBuffer - CY_USB_UVC_MAX_HEADER;
+    }
+
     /* Commit the buffer for transfer */
-    if (pUsbApp->devSpeed >= CY_USBD_USB_DEV_SS_GEN1)
+    status = Cy_HBDma_Channel_CommitBuffer(pChHandle, &buffStat);
+    if (status != CY_HBDMA_MGR_SUCCESS)
     {
-        // status = Cy_HBDma_Channel_DiscardBuffer(pChHandle, &buffStat);
-        // return;
-        status = Cy_HBDma_Channel_CommitBuffer(pChHandle, &buffStat);
-        if (status != CY_HBDMA_MGR_SUCCESS)
-        {
-            DBG_APP_ERR("HB-DMA CommitBuffer Error\r\n");
-            return;
-        }
-        Cy_USB_App_KeepLinkActive(pUsbApp);
+        DBG_APP_ERR("HB-DMA CommitBuffer Error\r\n");
+        return;
     }
-    else
-    {
-        Cy_USB_AppQueueWrite(pUsbApp, pUsbApp->uvcInEpNum, buffStat.pBuffer, cy_uvc_commitLength);
-    }
+    Cy_USB_App_KeepLinkActive(pUsbApp);
 } /* End of CyUvcAppHandleProduceEvent() */
 
-
 /******************************************************************************
-* Function Name: Cy_UVC_AppHandleSendCompletion(cy_stc_usb_app_ctxt_t  *pUsbApp)
-*******************************************************************************
-* Summary:
-* Function that handles DMA transfer completion on the USB-HS BULK-IN
-* endpoint. This is equivalent to the receipt of a consume event in the USB-SS use
-* case and we can discard the active data buffer on the LVDS side.
-*
-* \param pAppCtxt
-* application layer context pointer.
-*
-* \return
-* None
-*
- *****************************************************************************/
-void Cy_UVC_AppHandleSendCompletion (cy_stc_usb_app_ctxt_t *pUsbApp)
-{
-    cy_stc_hbdma_buff_status_t buffStat;
-    cy_en_hbdma_mgr_status_t   dmaStat;
-
-    /* At least one buffer must be pending. */
-    if (pUsbApp->uvcPendingBufCnt == 0)
-    {
-        DBG_APP_ERR("PendingBufCnt=0 on SendComplete\r\n");
-        return;
-    }
-
-    /* The buffer which has been sent to the USB host can be discarded. */
-    dmaStat = Cy_HBDma_Channel_DiscardBuffer(pUsbApp->hbBulkInChannel, &buffStat);
-    if (dmaStat != CY_HBDMA_MGR_SUCCESS)
-    {
-        DBG_APP_ERR("DiscardBuffer failed with status=%x\r\n", dmaStat);
-        return;
-    }
-
-    /* If another DMA buffer has already been filled by the producer, go
-     * on and send it to the host controller.
-     */
-    pUsbApp->uvcPendingBufCnt--;
-    if (pUsbApp->uvcPendingBufCnt > 0)
-    {
-        Cy_UVC_AppHandleProduceEvent(pUsbApp, pUsbApp->hbBulkInChannel);
-    }
-} /* End of Cy_UVC_AppHandleSendCompletion() */
-
-/******************************************************************************
-* Function Name: Cy_UVC_HbDmaCb(cy_stc_hbdma_channel_t *handle, 
+* Function Name: Cy_UVC_HbDmaCb(cy_stc_hbdma_channel_t *handle,
 *                                   cy_en_hbdma_cb_type_t type,
-*                                   cy_stc_hbdma_buff_status_t *pbufStat, 
+*                                   cy_stc_hbdma_buff_status_t *pbufStat,
 *                                   void *userCtx)
 *******************************************************************************
 * Summary:
@@ -2211,21 +2213,10 @@ void Cy_UVC_HbDmaCb(
         /* Video streamer application enable */
         if ((cy_uvc_IsApplnActive == true) && (cy_uvc_devconfigured == true))
         {
-            if (pAppCtxt->devSpeed >= CY_USBD_USB_DEV_SS_GEN1)
-            {
-                Cy_UVC_AppHandleProduceEvent(pAppCtxt, handle);
-            }
-            else
-            {
-                pAppCtxt->uvcPendingBufCnt++;
-                if (pAppCtxt->uvcPendingBufCnt == 1)
-                {
-                    Cy_UVC_AppHandleProduceEvent(pAppCtxt, handle);
-                }
-            }
+            Cy_UVC_AppHandleProduceEvent(pAppCtxt, handle);
         }
     }
-    else if (type == CY_HBDMA_CB_CONS_EVENT)
+    if (type == CY_HBDMA_CB_CONS_EVENT)
     {
         pAppCtxt->glCons++;
     }
@@ -2303,36 +2294,33 @@ static void Cy_USB_AppSetupEndpDmaParamsSs (cy_stc_usb_app_ctxt_t *pUsbApp,
     cy_en_hbdma_mgr_status_t mgrStat;
     uint32_t endpNumber, dir;
     uint16_t maxPktSize;
-    uint8_t *pCompDscr;
-    uint8_t burstSize;
 
     Cy_USBD_GetEndpNumMaxPktDir(pEndpDscr, &endpNumber, &maxPktSize, &dir);
-    pCompDscr = Cy_USBD_GetSsEndpCompDscr(pUsbApp->pUsbdCtxt, pEndpDscr);
-    Cy_USBD_GetEndpCompnMaxburst(pCompDscr, &burstSize);
-
-    DBG_APP_INFO("AppSetupEndpDmaParamsSs: endpNum:0x%x maxPktSize:0x%x "
-                 "dir:0x%x burstSize:0x%x\r\n",
-                 endpNumber, maxPktSize,
-                 dir, burstSize);
+    DBG_APP_INFO("AppSetupEndpDmaParamsSs: endpNum:0x%x maxPktSize:0x%x dir:0x%x\r\n",
+                 endpNumber, maxPktSize, dir);
 
     /* Handling UVC streaming endpoint. */
     if ((endpNumber == UVC_STREAM_ENDPOINT) && (dir != 0)) {
-        pUsbApp->uvcInEpNum       = (uint8_t)endpNumber;
-        pUsbApp->uvcPendingBufCnt = 0;
+        pUsbApp->uvcInEpNum = (uint8_t)endpNumber;
 
-        dmaConfig.chType       = CY_HBDMA_TYPE_IP_TO_IP;    /* DMA Channel type: from LVDS to USB EG IP. */
-        dmaConfig.consSckCount = 1;                         /* Only one consumer socket per channel. */
-        dmaConfig.consSck[0]   = (cy_hbdma_socket_id_t)(CY_HBDMA_USBEG_SOCKET_00 + endpNumber);
-        dmaConfig.consSck[1]   = (cy_hbdma_socket_id_t)0;
-        dmaConfig.count        = CY_USB_UVC_STREAM_BUF_COUNT; /* DMA Buffer Count */
-        if (pUsbApp->devSpeed <= CY_USBD_USB_DEV_HS)
+        if (pUsbApp->hbBulkInChannel != NULL)
         {
-            #if (!LVCMOS_EN && WL_EN) /* DMA count=1 for LVDS WL mode only*/
-            dmaConfig.count      = 1; /* DMA Buffer Count */
-            #endif 
-            dmaConfig.chType     = CY_HBDMA_TYPE_IP_TO_MEM;
-            dmaConfig.consSck[0] = (cy_hbdma_socket_id_t)0;
+            /* If channel was created earlier, then destroy the channel and create a fresh. */
+            Cy_HBDma_Channel_Disable(pUsbApp->hbBulkInChannel);
+            Cy_HBDma_Channel_Destroy(pUsbApp->hbBulkInChannel);
+            pUsbApp->hbBulkInChannel = NULL;
         }
+
+        dmaConfig.chType        = CY_HBDMA_TYPE_IP_TO_IP;    /* DMA Channel type: from LVDS to USB EG IP. */
+        dmaConfig.usbMaxPktSize = maxPktSize;
+        dmaConfig.consSckCount  = 1;                         /* Only one consumer socket per channel. */
+        dmaConfig.consSck[0]    = (cy_hbdma_socket_id_t)(CY_HBDMA_USBEG_SOCKET_00 + endpNumber);
+        dmaConfig.consSck[1]    = (cy_hbdma_socket_id_t)0;
+        dmaConfig.count         = CY_USB_UVC_STREAM_BUF_COUNT; /* DMA Buffer Count */
+        dmaConfig.prodBufSize   = FPGA_DMA_BUFFER_SIZE;        /* Receive depends on uvc header adds by FX10 or FPGA*/
+        dmaConfig.size          = DMA_BUFFER_SIZE;             /* DMA Buffer size in bytes */
+        dmaConfig.bufferMode    = true;                        /* DMA buffer mode enabled */
+        dmaConfig.userCtx       = (void *)(pUsbApp);           /* Pass the application context as user context. */
 
 #if MANUAL_DMA_CHANNEL
         #if UVC_HEADER_BY_FX20
@@ -2349,18 +2337,8 @@ static void Cy_USB_AppSetupEndpDmaParamsSs (cy_stc_usb_app_ctxt_t *pUsbApp,
         dmaConfig.eventEnable  = 1;          /* Auto channel: Enable event signalling between sockets. */
         dmaConfig.intrEnable   = 0;          /* No interrupts required in this case. */
         dmaConfig.cb           = NULL;       /* Call back function is not required for AUTO DMA */
-        if (pUsbApp->devSpeed <= CY_USBD_USB_DEV_HS)
-        {
-        /* In HS connection, we have to use a MANUAL channel. */
-        dmaConfig.eventEnable = 0;      /* Event signalling cannot be used with USBHS endpoint. */
-        dmaConfig.intrEnable  = LVDSSS_LVDS_ADAPTER_DMA_SCK_INTR_PRODUCE_EVENT_Msk;
-        }
-#endif
-        dmaConfig.prodBufSize  = FPGA_DMA_BUFFER_SIZE;        /* Receive depends on uvc header adds by FX10 or FPGA*/
-        dmaConfig.size         = DMA_BUFFER_SIZE;             /* DMA Buffer size in bytes */
-        dmaConfig.bufferMode   = true;                        /* DMA buffer mode enabled */
-        dmaConfig.userCtx      = (void *)(pUsbApp);           /* Pass the application context as user context. */
 
+#endif
 
 #if PORT1_EN /* PORT1 */
     #if THREAD_INTERLEAVE_EN /* PORT1 Dual Thread */
@@ -2384,14 +2362,42 @@ static void Cy_USB_AppSetupEndpDmaParamsSs (cy_stc_usb_app_ctxt_t *pUsbApp,
     #endif /* THREAD_INTERLEAVE_EN */
 #endif /* PORT1_EN */
 
-
-        if (pUsbApp->hbBulkInChannel != NULL)
+        if (pUsbApp->devSpeed <= CY_USBD_USB_DEV_HS)
         {
-            /* If channel was created earlier, then destroy the channel and create a fresh. */
-            Cy_HBDma_Channel_Disable(pUsbApp->hbBulkInChannel);
-            Cy_HBDma_Channel_Destroy(pUsbApp->hbBulkInChannel);
-            pUsbApp->hbBulkInChannel = NULL;
+            #if (!LVCMOS_EN && WL_EN) /* DMA count=1 for LVDS WL mode only*/
+            {
+                dmaConfig.count      = 1; /* DMA Buffer Count */
+            }
+            #endif
+            dmaConfig.consSck[0]  = (cy_hbdma_socket_id_t)(CY_HBDMA_USBHS_IN_EP_00 + endpNumber);
+            dmaConfig.eventEnable = 0;  /* Manual channel: Disable event signalling between sockets. */
+            dmaConfig.intrEnable  = LVDSSS_LVDS_ADAPTER_DMA_SCK_INTR_PRODUCE_EVENT_Msk |
+                                    LVDSSS_LVDS_ADAPTER_DMA_SCK_INTR_CONSUME_EVENT_Msk;
+            #if AUTO_DMA_CHANNEL
+            DBG_APP_INFO("Use manual DMA configuration for USB 2.0 due to architectural limitation \r\n");
+            cy_en_scb_i2c_status_t  status = CY_SCB_I2C_SUCCESS;
+            /* In case of HS is detected , Manual DMA channel should use */
+            dmaConfig.size        = CY_USB_UVC_STREAM_BUF_SIZE_HS;             /* DMA Buffer size in bytes */
+            dmaConfig.prodBufSize = FPGA_DMA_BUFFER_SIZE_HS;
+            dmaConfig.prodHdrSize = CY_USB_UVC_MAX_HEADER;
+            dmaConfig.cb          = Cy_UVC_HbDmaCb;   /* HB-DMA callback */
+
+            /* Update DMA buffer size used by Firmware */
+            status = Cy_I2C_Write(FPGASLAVE_ADDR,DEVICE0_OFFSET+DEVICE_BUFFER_SIZE_MSB_ADDRESS,CY_USB_GET_MSB(FPGA_DMA_BUFFER_SIZE_HS),
+                                              FPGA_I2C_ADDRESS_WIDTH,FPGA_I2C_DATA_WIDTH);
+            ASSERT_NON_BLOCK(status == CY_SCB_I2C_SUCCESS, status);
+
+            status = Cy_I2C_Write(FPGASLAVE_ADDR,DEVICE0_OFFSET+DEVICE_BUFFER_SIZE_LSB_ADDRESS,CY_USB_GET_LSB(FPGA_DMA_BUFFER_SIZE_HS),
+                                              FPGA_I2C_ADDRESS_WIDTH,FPGA_I2C_DATA_WIDTH);
+            ASSERT_NON_BLOCK(status == CY_SCB_I2C_SUCCESS, status);
+
+            status = Cy_I2C_Write(FPGASLAVE_ADDR,FPGA_UVC_HEADER_CTRL_ADDRESS,FPGA_UVC_HEADER_DISABLE,
+                                            FPGA_I2C_ADDRESS_WIDTH,FPGA_I2C_DATA_WIDTH);
+            ASSERT_NON_BLOCK(status == CY_SCB_I2C_SUCCESS, status);
+            #endif
         }
+        /* Copy DMA producer Buffer size into global variable */
+        pUsbApp->glDmaProdBufSize = dmaConfig.prodBufSize;
         Cy_USBD_SetEpBurstMode(pUsbApp->pUsbdCtxt, endpNumber, CY_USB_ENDP_DIR_IN, true);
 
         LOG_COLOR("DMA Channel Config - Manual Channel enable: %d UVC Header Addition by FPGA/INMD: %d \n\r", MANUAL_DMA_CHANNEL,UVC_HEADER_BY_FPGA);
@@ -2403,6 +2409,9 @@ static void Cy_USB_AppSetupEndpDmaParamsSs (cy_stc_usb_app_ctxt_t *pUsbApp,
         if (mgrStat != CY_HBDMA_MGR_SUCCESS)
         {
             DBG_APP_ERR("BulkIn channel create failed 0x%x\r\n", mgrStat);
+            if (pUsbApp->devSpeed <= CY_USBD_USB_DEV_HS && AUTO_DMA_CHANNEL)
+                DBG_APP_ERR("Switch to SuperSpeed USB Port and Cable, or Use Manual DMA configuration in HS \r\n");
+
             return;
         }
 
@@ -2418,22 +2427,29 @@ static void Cy_USB_AppSetupEndpDmaParamsSs (cy_stc_usb_app_ctxt_t *pUsbApp,
             return;
         }
 
-        dmaConfig.size         = UAC_XFER_BUF_SIZE;         /* DMA Buffer size in bytes */
-        dmaConfig.count        = PDM_APP_BUFFER_CNT;        /* DMA Buffer Count */
-        dmaConfig.prodHdrSize  = 0;                         /* No header being added. */
-        dmaConfig.prodBufSize  = UAC_XFER_BUF_SIZE;
-        dmaConfig.eventEnable  = 0;
-        dmaConfig.intrEnable   = 0x3;
-        dmaConfig.bufferMode   = false;                     /* DMA buffer mode disabled */
-        dmaConfig.chType       = CY_HBDMA_TYPE_MEM_TO_IP;   /* DMA Channel type: from MEM to USB EG IP. */
-        dmaConfig.prodSckCount = 1;                         /* No. of producer sockets */
-        dmaConfig.prodSck[0]   = CY_HBDMA_VIRT_SOCKET_WR;
-        dmaConfig.prodSck[1]   = (cy_hbdma_socket_id_t)0;   /* Producer Socket ID: None */
-        dmaConfig.consSckCount = 1;                         /* No. of consumer Sockets */
-        dmaConfig.consSck[0]   = (cy_hbdma_socket_id_t)(CY_HBDMA_USBEG_SOCKET_00 + endpNumber);
-        dmaConfig.consSck[1]   = (cy_hbdma_socket_id_t)0;   /* Consumer Socket ID: None */
-        dmaConfig.cb           = Cy_UAC_HbDmaCb;              /* HB-DMA callback */
-        dmaConfig.userCtx      = (void *)(pUsbApp);         /* Pass the application context as user context. */
+        dmaConfig.usbMaxPktSize = maxPktSize;
+        dmaConfig.size          = UAC_XFER_BUF_SIZE;         /* DMA Buffer size in bytes */
+        dmaConfig.count         = PDM_APP_BUFFER_CNT;        /* DMA Buffer Count */
+        dmaConfig.prodHdrSize   = 0;                         /* No header being added. */
+        dmaConfig.prodBufSize   = UAC_XFER_BUF_SIZE;
+        dmaConfig.eventEnable   = 0;
+        dmaConfig.intrEnable    = LVDSSS_LVDS_ADAPTER_DMA_SCK_INTR_PRODUCE_EVENT_Msk |
+                                  LVDSSS_LVDS_ADAPTER_DMA_SCK_INTR_CONSUME_EVENT_Msk;
+        dmaConfig.bufferMode    = false;                     /* DMA buffer mode disabled */
+        dmaConfig.chType        = CY_HBDMA_TYPE_MEM_TO_IP;   /* DMA Channel type: from MEM to USB EG IP. */
+        dmaConfig.prodSckCount  = 1;                         /* No. of producer sockets */
+        dmaConfig.prodSck[0]    = CY_HBDMA_VIRT_SOCKET_WR;
+        dmaConfig.prodSck[1]    = (cy_hbdma_socket_id_t)0;   /* Producer Socket ID: None */
+        dmaConfig.consSckCount  = 1;                         /* No. of consumer Sockets */
+        dmaConfig.consSck[0]    = (cy_hbdma_socket_id_t)(CY_HBDMA_USBEG_SOCKET_00 + endpNumber);
+        dmaConfig.consSck[1]    = (cy_hbdma_socket_id_t)0;   /* Consumer Socket ID: None */
+        dmaConfig.cb            = Cy_UAC_HbDmaCb;              /* HB-DMA callback */
+        dmaConfig.userCtx       = (void *)(pUsbApp);         /* Pass the application context as user context. */
+
+        /* Choose the correct consumer in case of USB-HS connection. */
+        if (pUsbApp->devSpeed <= CY_USBD_USB_DEV_HS) {
+            dmaConfig.consSck[0] = (cy_hbdma_socket_id_t)(CY_HBDMA_USBHS_IN_EP_00 + endpNumber);
+        }
 
         mgrStat = Cy_HBDma_Channel_Create(pUsbApp->pUsbdCtxt->pHBDmaMgr,
                 &(pUsbApp->endpInDma[endpNumber].hbDmaChannel),
@@ -2454,69 +2470,27 @@ static void Cy_USB_AppSetupEndpDmaParamsSs (cy_stc_usb_app_ctxt_t *pUsbApp,
             return;
         }
 
+#if ((!LVCMOS_EN) && (FPGA_ENABLE))
+        /* In LVDS WL to USB 2.x case, use System RAM buffers for the Audio data transfer. */
+        if (pUsbApp->devSpeed <= CY_USBD_USB_DEV_HS) {
+            uint8_t idx;
+            for (idx = 0; idx < PDM_APP_BUFFER_CNT; idx++) {
+                pUsbApp->pPDMRxBuffer[idx] = (uint8_t *)glAudioDataBuf[idx];
+            }
+        }
+#endif /* ((!LVCMOS_EN) && (FPGA_ENABLE)) */
+
         pUsbApp->pdmRxBufIndex      = 0;
         pUsbApp->pdmRxFreeBufCount  = PDM_APP_BUFFER_CNT;
-        pUsbApp->nxtAudioTxBufIndex = 0;
-        pUsbApp->pdmInXferPending   = false;
 
         DBG_APP_INFO("HBDMA ISOCIN endpNum:%x ChnCreate status: %x\r\n", endpNumber, mgrStat);
 
-        if (pUsbApp->devSpeed > CY_USBD_USB_DEV_HS) {
-            /* Enable the channel for data transfer. */
-            mgrStat = Cy_HBDma_Channel_Enable(pUsbApp->pPDMToUsbChn, 0);
-            DBG_APP_INFO("HBDMA PDM to USB channel enable status: %x\r\n", mgrStat);
-        }
+        /* Enable the channel for data transfer. */
+        mgrStat = Cy_HBDma_Channel_Enable(pUsbApp->pPDMToUsbChn, 0);
+        DBG_APP_INFO("HBDMA PDM to USB channel enable status: %x\r\n", mgrStat);
     }
 #endif /* AUDIO_IF_EN */
 } /* End of Cy_USB_AppSetupEndpDmaParamsSs() */
-
-/******************************************************************************
-* Function Name: Cy_USB_AppSetupEndpDmaParamsHs(cy_stc_usb_app_ctxt_t *pUsbApp,
-                                                uint8_t *pEndpDscr)
-*******************************************************************************
-* Summary:
-*  Configure and enable HBW DMA channels.
-*
-* \param pUsbApp
-* application layer context pointer.
-*
-* \param pEndpDscr
-* Endpoint descriptor pointer
-*
-* \return
-* None
-*
- *****************************************************************************/
-static void
-Cy_USB_AppSetupEndpDmaParamsHs(cy_stc_usb_app_ctxt_t *pUsbApp,
-                               uint8_t *pEndpDscr)
-{
-    cy_stc_app_endp_dma_set_t *pEndpDmaSet;
-    DW_Type *pDW;
-    bool stat;
-    uint32_t endpNumber;
-    uint16_t maxPktSize = 0x00;
-    cy_en_usb_endp_dir_t endpDirection;
-
-    endpNumber = ((*(pEndpDscr + CY_USB_ENDP_DSCR_OFFSET_ADDRESS)) & 0x7F);
-    Cy_USBD_GetEndpMaxPktSize(pEndpDscr, &maxPktSize);
-
-    if (*(pEndpDscr + CY_USB_ENDP_DSCR_OFFSET_ADDRESS) & 0x80)
-    {
-        endpDirection = CY_USB_ENDP_DIR_IN;
-        pEndpDmaSet = &(pUsbApp->endpInDma[endpNumber]);
-        pDW = pUsbApp->pCpuDw1Base;
-    }
-    else
-    {
-        endpDirection = CY_USB_ENDP_DIR_OUT;
-        pEndpDmaSet = &(pUsbApp->endpOutDma[endpNumber]);
-        pDW = pUsbApp->pCpuDw0Base;
-    }
-
-    stat = Cy_USBHS_App_EnableEpDmaSet(pEndpDmaSet, pDW, endpNumber, endpNumber, endpDirection, maxPktSize);
-    DBG_APP_INFO("Enable EPDmaSet: endp=%x dir=%x stat=%x\r\n", endpNumber, endpDirection, stat);
-} /* End of Cy_USB_AppSetupEndpDmaParamsHs() */
 
 /******************************************************************************
 * Function Name: Cy_USB_AppSetupEndpDmaParams(cy_stc_usb_app_ctxt_t *pUsbApp,
@@ -2538,13 +2512,8 @@ Cy_USB_AppSetupEndpDmaParamsHs(cy_stc_usb_app_ctxt_t *pUsbApp,
 void Cy_USB_AppSetupEndpDmaParams (cy_stc_usb_app_ctxt_t *pUsbApp,
                                    uint8_t *pEndpDscr)
 {
-    /* We always need to do SS setup so that we can get data from the LVDS interface. */
+    /* Create/configure the DMA data path. */
     Cy_USB_AppSetupEndpDmaParamsSs(pUsbApp, pEndpDscr);
-
-    if (pUsbApp->devSpeed <= CY_USBD_USB_DEV_HS)
-    {
-        Cy_USB_AppSetupEndpDmaParamsHs(pUsbApp, pEndpDscr);
-    }
 } /* End of Cy_USB_AppSetupEndpDmaParams() */
 
 /******************************************************************************
@@ -2627,7 +2596,6 @@ void Cy_USB_AppConfigureEndp (cy_stc_usb_usbd_ctxt_t *pUsbdCtxt, uint8_t *pEndpD
 
     /* Print status of the endpoint configuration to help debug. */
     DBG_APP_INFO("#ENDPCFG: %d, %d\r\n", endpNumber, usbdRetCode);
-    return;
 } /* End of Cy_USB_AppConfigureEndp() */
 
 /******************************************************************************
@@ -2747,7 +2715,6 @@ void Cy_USB_AppSetCfgCallback(void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
 #endif /* USB3_LPM_ENABLE */
 
     DBG_APP_INFO("AppSetCfgCbEnd Done\r\n");
-    return;
 } /* End of Cy_USB_AppSetCfgCallback()*/
 
 /******************************************************************************
@@ -2805,20 +2772,10 @@ void Cy_USB_AppBusResetCallback(void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtx
         DBG_APP_INFO("Disabling LPM\r\n");
         Cy_USBSS_Cal_LPMDisable(pUsbdCtxt->pSsCalCtxt);
 #endif /* USB3_LPM_ENABLE */
-
-        /*
-         * Toggle the REG_VBUS and PCLK_EN bits in the PHY.TOP_CTRL_0 register
-         * when there is a Warm Reset.
-         */
-        if ((USB32DEV->USB32DEV_LNK.LNK_LTSSM_STATE & USB32DEV_LNK_LTSSM_STATE_LTSSM_STATE_Msk) ==
-            CY_USBSS_LNK_STATE_RXDETECT_RES)
-        {
-            DBG_APP_TRACE("Skip reset PHY on WarmReset\r\n");
-        }
     }
+
     cy_uvc_devconfigured = false;
     cy_uvc_IsApplnActive = false;
-    return;
 } /* End of Cy_USB_AppBusResetCallback() */
 
 /******************************************************************************
@@ -2853,7 +2810,6 @@ void Cy_USB_AppBusResetDoneCallback(void *pAppCtxt,
     pUsbApp = (cy_stc_usb_app_ctxt_t *)pAppCtxt;
     pUsbApp->devState = CY_USB_DEVICE_STATE_DEFAULT;
     pUsbApp->prevDevState = pUsbApp->devState;
-    return;
 } /* End of Cy_USB_AppBusResetDoneCallback(). */
 
 extern uint8_t CyFxUSB20DeviceDscr[];
@@ -2889,7 +2845,6 @@ void Cy_USB_AppBusSpeedCallback(void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtx
     pUsbApp->devState = CY_USB_DEVICE_STATE_DEFAULT;
     pUsbApp->devSpeed = Cy_USBD_GetDeviceSpeed(pUsbdCtxt);
     Cy_USBD_SetDscr(pUsbApp->pUsbdCtxt, CY_USB_SET_HS_DEVICE_DSCR, 0, (uint8_t *)CyFxUSB20DeviceDscr);
-    return;
 } /* End of Cy_USB_AppBusSpeedCallback() */
 
 /******************************************************************************
@@ -2941,7 +2896,6 @@ void Cy_USB_AppSetupCallback(void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
     wIndex = pUsbdCtxt->setupReq.wIndex;
     pUsbApp->wValue = wValue;
     pUsbApp->wIndex = wIndex;
-    pUsbApp->bRequest = bRequest;
     wLength = pUsbdCtxt->setupReq.wLength;
 
     if (bType == CY_USB_CTRL_REQ_STD)
@@ -3049,40 +3003,8 @@ void Cy_USB_AppSetupCallback(void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
 
     if (bType == CY_USB_CTRL_REQ_VENDOR)
     {
-        if(bRequest == HDMI_DELAY_SETTING)
-        {
-            isReqHandled = true;
-        }
-        else
-        {
-            xMsg.type = CY_USB_UVC_FLASH_PROGRAMMER_EVENT;
-            xMsg.data[0] = bRequest | (wValue << 8);
-            xMsg.data[1] = wIndex | wLength << 16;
-            status = xQueueSendFromISR(pUsbApp->uvcMsgQueue, &(xMsg), &(xHigherPriorityTaskWoken));
-            ASSERT_NON_BLOCK(pdTRUE == status,status);
-            isReqHandled = true;
-        }
-
-
-        /* Command to fetch SRAM content or MMIO registers for debug. */
-        if ((bRequest == 0xA0) && (wLength != 0) && (wLength <= 4096U) && ((wLength & 0x03) == 0))
-        {
-            uint32_t baseAddr = (wValue << 16U) | wIndex;
-            uint16_t i;
-
-            if ((baseAddr >= 0x1C000000UL) && (baseAddr < 0x20000000UL))
-            {
-                retStatus = Cy_USB_USBD_SendEndp0Data(pUsbdCtxt, (uint8_t *)baseAddr, wLength);
-            }
-            else
-            {
-                for (i = 0; i < wLength / 4; i++)
-                {
-                    Ep0TestBuffer[i] = ((uint32_t *)baseAddr)[i];
-                }
-                retStatus = Cy_USB_USBD_SendEndp0Data(pUsbdCtxt, (uint8_t *)Ep0TestBuffer, wLength);
-            }
-        }
+        /* user-defined code section */
+        isReqHandled = true;
     }
 
     /* Check for UVC Class Requests */
@@ -3102,7 +3024,7 @@ void Cy_USB_AppSetupCallback(void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
         {
             DBG_APP_INFO("CY_USB_CTRL_REQ_RECIPENT_INTF && CY_USB_UVC_INTERFACE_VC\r\n");
             /* Respond to CY_USB_UVC_INTERFACE_VC  */
-            xMsg.type    = CY_USB_UVC_DEVICE_VIDIO_CNTRL_RQT;
+            xMsg.type    = CY_USB_UVC_DEVICE_VIDEO_CNTRL_RQT_EVENT;
             xMsg.data[0] = wLength;
             status = xQueueSendFromISR(pUsbApp->uvcMsgQueue, &(xMsg), &(xHigherPriorityTaskWoken));
             ASSERT_NON_BLOCK(pdTRUE == status,status);
@@ -3208,7 +3130,6 @@ void Cy_USB_AppSetupCallback(void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
 
                 case CY_USB_UVC_SET_CUR_REQ:
                     /* Since this request has OUT data, it should be handled in task context. */
-                    // Cy_UVC_StreamStartStop(STOP);
                     DBG_APP_INFO("CY_USB_UVC_SET_CUR_REQ\r\n");
                     xMsg.type    = CY_USB_UVC_DEVICE_SET_CUR_RQT;
                     xMsg.data[0] = wLength;
@@ -3283,6 +3204,12 @@ void Cy_USB_AppSuspendCallback(void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt
     pUsbApp = (cy_stc_usb_app_ctxt_t *)pAppCtxt;
     pUsbApp->prevDevState = pUsbApp->devState;
     pUsbApp->devState = CY_USB_DEVICE_STATE_SUSPEND;
+#if DEEPSLEEP_EN
+    cy_stc_usbd_app_msg_t xMsg;
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    xMsg.type = CY_USB_ENTER_DEEPSLEEP;
+    xQueueSendFromISR(pUsbApp->uvcMsgQueue, &(xMsg), &(xHigherPriorityTaskWoken));
+#endif
 } /* End of Cy_USB_AppSuspendCallback() */
 
 /******************************************************************************
@@ -3316,7 +3243,6 @@ void Cy_USB_AppResumeCallback(void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
     tempState = pUsbApp->devState;
     pUsbApp->devState = pUsbApp->prevDevState;
     pUsbApp->prevDevState = tempState;
-    return;
 } /* End of Cy_USB_AppResumeCallback() */
 
 /******************************************************************************
@@ -3386,9 +3312,11 @@ void Cy_USB_AppSetIntfCallback(void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt
 void Cy_USB_AppZlpCallback(void *pUsbApp, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
                            cy_stc_usb_cal_msg_t *pMsg)
 {
-    DBG_APP_INFO("AppZlpCb\r\n");
+    cy_stc_usb_app_ctxt_t *pAppCtxt = (cy_stc_usb_app_ctxt_t *)pUsbApp;
 
-    return;
+    if (pMsg->type == CY_USB_CAL_MSG_OUT_ZLP) {
+        Cy_HBDma_Mgr_HandleUsbShortInterrupt(pAppCtxt->pHbDmaMgrCtxt, (pMsg->data[0] & 0x7FU), 0);
+    }
 } /* end of function. */
 
 /******************************************************************************
@@ -3415,7 +3343,6 @@ void Cy_USB_AppL1SleepCallback(void *pUsbApp, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
                                cy_stc_usb_cal_msg_t *pMsg)
 {
     DBG_APP_INFO("AppL1SleepCb\r\n");
-    return;
 } /* end of function. */
 
 /******************************************************************************
@@ -3442,7 +3369,6 @@ void Cy_USB_AppL1ResumeCallback(void *pUsbApp, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt
                                 cy_stc_usb_cal_msg_t *pMsg)
 {
     DBG_APP_INFO("AppL1ResumeCb\r\n");
-    return;
 } /* End of Cy_USB_AppL1ResumeCallback() */
 
 /******************************************************************************
@@ -3468,8 +3394,11 @@ void Cy_USB_AppL1ResumeCallback(void *pUsbApp, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt
 void Cy_USB_AppSlpCallback(void *pUsbApp, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
                            cy_stc_usb_cal_msg_t *pMsg)
 {
-    DBG_APP_INFO("AppSlpCb\r\n");
-    return;
+    cy_stc_usb_app_ctxt_t *pAppCtxt = (cy_stc_usb_app_ctxt_t *)pUsbApp;
+
+    if (pMsg->type == CY_USB_CAL_MSG_OUT_SLP) {
+        Cy_HBDma_Mgr_HandleUsbShortInterrupt(pAppCtxt->pHbDmaMgrCtxt, (pMsg->data[0] & 0x7FU), pMsg->data[1]);
+    }
 } /* End of Cy_USB_AppSlpCallback() */
 
 /******************************************************************************
@@ -3496,7 +3425,6 @@ void Cy_USB_AppSetFeatureCallback(void *pUsbApp, cy_stc_usb_usbd_ctxt_t *pUsbdCt
                                   cy_stc_usb_cal_msg_t *pMsg)
 {
     DBG_APP_INFO("AppSetFeatureCb\r\n");
-    return;
 } /* End of function. */
 
 /******************************************************************************
@@ -3524,60 +3452,11 @@ void Cy_USB_AppClearFeatureCallback(void *pUsbApp,
                                     cy_stc_usb_cal_msg_t *pMsg)
 {
     DBG_APP_INFO("AppClearFeatureCb\r\n");
-    return;
 } /* end of function. */
 
 /******************************************************************************
-* Function name: Cy_USB_AppQueueWrite(cy_stc_usb_app_ctxt_t *pAppCtxt, uint8_t endpNumber,
-                          uint8_t *pBuffer, uint32_t dataSize)
-*******************************************************************************
-*
-* Queue USBHS Write on the USB endpoint
-*
-* \param pAppCtxt
-* application layer context pointer.
-*
-* \param endpNumber
-* Endpoint number
-*
-* \param pBuffer
-* Data Buffer Pointer
-*
-* \param dataSize
-* DataSize to send on USB bus
-*
-* \return
-* None
-*
-******************************************************************************/
-void Cy_USB_AppQueueWrite(cy_stc_usb_app_ctxt_t *pAppCtxt, uint8_t endpNumber,
-                          uint8_t *pBuffer, uint32_t dataSize)
-{
-    cy_stc_app_endp_dma_set_t *dmaset_p;
-
-    /* Null pointer checks. */
-    if ((pAppCtxt == NULL) || (pAppCtxt->pUsbdCtxt == NULL) ||
-            (pAppCtxt->pCpuDw1Base == NULL) || (pBuffer == NULL)) {
-        DBG_APP_ERR("QueueWrite Err0\r\n");
-        return;
-    }
-
-    /*
-     * Verify that the selected endpoint is valid and the dataSize
-     * is non-zero.
-     */
-    dmaset_p = &(pAppCtxt->endpInDma[endpNumber]);
-    if ((dmaset_p->valid == 0) || (dataSize == 0)) {
-        DBG_APP_ERR("QueueWrite Err1\r\n");
-        return;
-    }
-
-    Cy_USBHS_App_QueueWrite(dmaset_p, pBuffer, dataSize);
-} /* End of Cy_USB_AppQueueWrite() */
-
-/******************************************************************************
-* Function name: Cy_USB_AppInitDmaIntr(uint32_t endpNumber, cy_en_usb_endp_dir_t endpDirection,
-                           cy_israddress userIsr)
+* Function name: Cy_USB_AppInitDmaIntr(uint32_t endpNumber,,
+                    cy_en_usb_endp_dir_t endpDirection, cy_israddress userIsr)
 *******************************************************************************
 *
 * Function to register an ISR for the DMA channel associated with an endpoint
@@ -3644,38 +3523,6 @@ void Cy_USB_AppInitDmaIntr(uint32_t endpNumber, cy_en_usb_endp_dir_t endpDirecti
     }
 } /* End of Cy_USB_AppInitDmaIntr() */
 
-/******************************************************************************
-* Function name: Cy_USB_AppClearDmaInterrupt(cy_stc_usb_app_ctxt_t *pAppCtxt,
-                                 uint32_t endpNumber, cy_en_usb_endp_dir_t endpDirection)
-*******************************************************************************
-*
-* Clear DMA Interrupt
-*
-* \param pAppCtxt
-* application layer context pointer.
-*
-* \param endpNumber
-* Endpoint number
-*
-* \param endpDirection
-* Endpoint direction
-*
-* \return
-* None
-*
-******************************************************************************/
-void Cy_USB_AppClearDmaInterrupt(cy_stc_usb_app_ctxt_t *pAppCtxt,
-                                 uint32_t endpNumber, cy_en_usb_endp_dir_t endpDirection)
-{
-    if ((pAppCtxt != NULL) && (endpNumber > 0) &&
-            (endpNumber < CY_USB_MAX_ENDP_NUMBER)) {
-        if (endpDirection == CY_USB_ENDP_DIR_IN) {
-            Cy_USBHS_App_ClearDmaInterrupt(&(pAppCtxt->endpInDma[endpNumber]));
-        } else  {
-            Cy_USBHS_App_ClearDmaInterrupt(&(pAppCtxt->endpOutDma[endpNumber]));
-        }
-    }
-} /* End of Cy_USB_AppClearDmaInterrupt() */
 
 /*[]*/
 

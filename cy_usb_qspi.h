@@ -73,7 +73,7 @@ typedef struct cy_stc_cfi_erase_block_info_t
 /* EZ-USB FX Control Center application appends a metadata section to any file it programs to the external flash.
  * This can be used by the application using the flash to find out details such as start address, size etc. about the programmed file */
 
-typedef struct 
+typedef struct
 {
     uint32_t startSignature;
     uint32_t fpgaFileStartAddress;
@@ -92,8 +92,6 @@ typedef struct
 #define CY_APP_QSPI_METADATA_ADDRESS            (0x00)
 #define CY_APP_QSPI_METADATA_SIZE               (24)
 #define CY_APP_QSPI_METADATA_SIGNATURE          (0x23584649) /*IFX#*/
-
-#define FX10_Ti180_KIT_PASSIVE_SER_WIDTH        (PASSIVE_x4)
 
 #if (FPGA_CONFIG_MODE == PASSIVE_SERIAL_MODE)
 /*
@@ -177,13 +175,11 @@ typedef struct
 #define HDMI_KIT_FPGA_SOFTRESET_PORT            (P11_5_PORT)
 #define HDMI_KIT_FPGA_SOFTRESET_PIN             (P11_5_PIN)
 
-
 #define CY_APP_QSPI_STATUS_1_READ_CMD           (0x05)
 #define CY_APP_QSPI_STATUS_2_READ_CMD           (0x07)
 #define CY_APP_QSPI_QREAD_CMD                   (0xEB)
 #define CY_APP_QSPI_QREAD_MODE_CMD              (0x01)
 #define CY_APP_QSPI_READ_ID_CMD                 (0x9F)
-
 
 #define CY_APP_QSPI_NUM_ADDRESS_BYTES           (3)
 #define CY_APP_QSPI_ID_SIZE                     (16)
@@ -234,15 +230,6 @@ typedef struct
 #define CY_SPI_WRITE_ENABLE_LATCH_MASK          (0x02)
 
 extern cy_stc_smif_context_t qspiContext;
-
-typedef struct cy_stc_cfi_flash_map_t
-{
-  uint32_t deviceSizeFactor; /*0x27h*/
-  uint32_t deviceSize;
-  uint32_t numEraseRegions;    /*0x2c*/
-  cy_stc_cfi_erase_block_info_t memoryLayout[CY_CFI_MAX_SIZE_NUM_ERASE_SECTORS]; /* 0x2D onwards*/
-  uint32_t num4KBParameterRegions;
-}cy_stc_cfi_flash_map_t;
 
 /*****************************************************************************
 * Function Name:Cy_FPGAConfigPins(cy_stc_usb_app_ctxt_t *pAppCtxt
@@ -352,7 +339,7 @@ void Cy_USB_QSPIChipErase(cy_en_smif_slave_select_t slaveSelect);
 
 
 /*****************************************************************************
-* Function Name:Cy_SPI_AddressToArray(uint32_t value, uint8_t *byteArray, 
+* Function Name:Cy_SPI_AddressToArray(uint32_t value, uint8_t *byteArray,
                             uint8_t numAddressBytes)
 ******************************************************************************
 * Summary:

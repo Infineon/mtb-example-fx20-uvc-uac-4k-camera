@@ -33,7 +33,7 @@
 }
 #endif
 
-#define FPGASLAVE_ADDR                 (0x0D)      //FPGA i2c address (Do not change)
+#define FPGASLAVE_ADDR                 (0x0D)      /* FPGA i2c address (Do not change) */
 #define FX10_I2C_FQ_100KHZ             (100000)
 #define FX10_I2C_FQ_400KHZ             (400000)
 #define FX10_I2C_FQ_1MHZ               (1000000)
@@ -95,10 +95,11 @@ void Cy_I2C_MasterEvent(uint32_t events);
 * Return:
 *  0 for read success, error code for unsuccess.
 ******************************************************************************/
-cy_en_scb_i2c_status_t Cy_I2C_Read (uint16_t slaveAddress,uint32_t registerAddress,
-                                                uint8_t *data,
-                                                uint8_t addressWidth,
-                                                uint8_t dataWidth);
+cy_en_scb_i2c_status_t Cy_I2C_Read (uint16_t slaveAddress,
+                                    uint32_t registerAddress,
+                                    uint8_t *data,
+                                    uint8_t addressWidth,
+                                    uint8_t dataWidth);
 
 /******************************************************************************
 * Function Name: Cy_I2C_Write(uint16_t slaveAddress,uint16_t registerAddress,
@@ -107,7 +108,7 @@ cy_en_scb_i2c_status_t Cy_I2C_Read (uint16_t slaveAddress,uint32_t registerAddre
 *                    uint8_t dataWidth)
 *******************************************************************************
 * Summary:
-* Function to write data to i2c slave 
+* Function to write data to i2c slave
 *
 * Parameters:
 * \param slaveAddress
@@ -124,10 +125,11 @@ cy_en_scb_i2c_status_t Cy_I2C_Read (uint16_t slaveAddress,uint32_t registerAddre
 * Return:
 *  0 for read success, error code for unsuccess.
 ******************************************************************************/
-cy_en_scb_i2c_status_t Cy_I2C_Write (uint16_t slaveAddress,uint16_t registerAddress,
-                                                uint8_t data,
-                                                uint8_t addressWidth,
-                                                uint8_t dataWidth);
+cy_en_scb_i2c_status_t Cy_I2C_Write (uint16_t slaveAddress,
+                                     uint16_t registerAddress,
+                                     uint8_t data,
+                                     uint8_t addressWidth,
+                                     uint8_t dataWidth);
 
 /******************************************************************************
 * Function Name: Cy_I2C_FPGAGetVersion(cy_stc_usb_app_ctxt_t *pAppCtx)
@@ -148,4 +150,4 @@ cy_en_scb_i2c_status_t Cy_I2C_FPGAGetVersion(cy_stc_usb_app_ctxt_t *pAppCtxt);
 }
 #endif
 
-#endif //End _CY_USB_I2C_H_
+#endif /* End _CY_USB_I2C_H_ */

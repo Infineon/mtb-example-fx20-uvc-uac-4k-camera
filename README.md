@@ -7,7 +7,7 @@ This example illustrates the configuration and usage of GPIF III on the EZ-USB&t
 
 [View this README on GitHub.](https://github.com/Infineon/mtb-example-fx20-uvc-uac-4k-camera)
 
-[Provide feedback on this code example.](https://cypress.co1.qualtrics.com/jfe/form/SV_1NTns53sK2yiljn?Q_EED=eyJVbmlxdWUgRG9jIElkIjoiQ0UyNDE3MTAiLCJTcGVjIE51bWJlciI6IjAwMi00MTcxMCIsIkRvYyBUaXRsZSI6IkVaLVVTQiZ0cmFkZTsgRlgyMDogVVNCIFZpZGVvIENsYXNzIChVVkMpIDRLIGNhbWVyYSBhcHBsaWNhdGlvbiIsInJpZCI6InN1a3UiLCJEb2MgdmVyc2lvbiI6IjEuMC4wIiwiRG9jIExhbmd1YWdlIjoiRW5nbGlzaCIsIkRvYyBEaXZpc2lvbiI6Ik1DRCIsIkRvYyBCVSI6IldJUkVEIiwiRG9jIEZhbWlseSI6IlNTX1VTQiJ9)
+[Provide feedback on this code example.](https://yourvoice.infineon.com/jfe/form/SV_1NTns53sK2yiljn?Q_EED=eyJVbmlxdWUgRG9jIElkIjoiQ0UyNDE3MTAiLCJTcGVjIE51bWJlciI6IjAwMi00MTcxMCIsIkRvYyBUaXRsZSI6IkVaLVVTQiZ0cmFkZTsgRlgyMDogVVNCIFZpZGVvIENsYXNzIChVVkMpIDRLIGNhbWVyYSBhcHBsaWNhdGlvbiIsInJpZCI6InN1bWl0Lmt1bWFyQGluZmluZW9uLmNvbSIsIkRvYyB2ZXJzaW9uIjoiMS4wLjEiLCJEb2MgTGFuZ3VhZ2UiOiJFbmdsaXNoIiwiRG9jIERpdmlzaW9uIjoiTUNEIiwiRG9jIEJVIjoiV0lSRUQiLCJEb2MgRmFtaWx5IjoiU1NfVVNCIn0=)
 
 
 ## Requirements
@@ -491,6 +491,9 @@ Macro name             |    Description                           | Allowed valu
 *AUDIO_IF_EN*          | Enable integrated UAC function           | '1u' to enabled <br> '0u' to disable
 *USBFS_LOGS_ENABLE*    | Enable debug logs through USBFS port     | '1u' for debug logs over USBFS <br> '0u' for debug logs over UART (SCB1)
 *USB3_LPM_ENABLE*      | Enable USB LPM handling                  | '1u' for enabling USB LPM handling <br> '0u' for disabling LPM
+*CUSTOM_TRAIN_ENABLE*  | Enable LVDS F/W based Training           | '1u' for enabling Firmware based LVDS PHY and LINK training, Infineon recomended to use Firmware based training with LVDS interface <br> '0u' to disable Custum training
+*DEEPSLEEP_EN*         | Enable CPU Deepsleep                     | '1u' for enabling CPU Deepsleep <br> '0u' for disabling CPU Deepsleep. Deepsleep can be enable in any configuration, Link re-training is needed if CPU enters Deepsleep
+*LVDS_LOW_POWER_EN*    | Enable LVDS Low power mode L1/L3         | '1u' for Enabling LVDS Low power mode <br> '0u' for LVDS Low power mode. Flag DEEPSLEEP_EN in some modes depends on LVDS_LOW_POWER_EN, check in cy_usb_app.h file for details
 
 <br>
 
@@ -606,6 +609,14 @@ Document title: *CE241710* – *EZ-USB&trade; FX20: USB Video Class (UVC) 4K cam
  Version | Description of change
  ------- | ---------------------
  1.0.0   | New code example
+ 1.0.1   | Updated application to make use of USBFXStack version 1.3.3
+         | Added support for firmware-based LVDS PHY training
+         | Added support for LVDS low power mode and CPU Deep sleep
+         | Updated FPGA source code, to support for DEMO_FX20_MIPI_001 kit and Efinix Ti180 DVK kit
+         | Updated FPGA also to support LVDS low power mode
+         | Unify DMA implementation used in USB_SS and USB_HS connection.
+         | Firmware always uses the Manual DMA configuration when device connected to USB 2.0 host.
+
 <br>
 
 

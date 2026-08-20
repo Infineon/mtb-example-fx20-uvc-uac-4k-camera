@@ -36,7 +36,6 @@ cy_en_smif_slave_select_t glSlaveSelectMode = CY_SMIF_SLAVE_SELECT_0;
 cy_en_smif_txfr_width_t   glCommandWidth[NUM_SPI_FLASH]     = {CY_SMIF_WIDTH_SINGLE, CY_SMIF_WIDTH_SINGLE, CY_SMIF_WIDTH_QUAD};
 cy_en_smif_txfr_width_t   glReadWriteWidth[NUM_SPI_FLASH]   = {CY_SMIF_WIDTH_SINGLE, CY_SMIF_WIDTH_SINGLE, CY_SMIF_WIDTH_OCTAL};
 uint8_t glSlaveSelectIndex[NUM_SPI_FLASH] = {CY_SMIF_SLAVE_SELECT_0, CY_SMIF_SLAVE_SELECT_1, (CY_SMIF_SLAVE_SELECT_0 | CY_SMIF_SLAVE_SELECT_1)};
-static cy_stc_cfi_flash_map_t glCfiFlashMap[NUM_SPI_FLASH];
 cy_en_flash_index_t glFlashMode = SPI_FLASH_0;
 cy_stc_externalFlashMetadata_t glFpgaFileMetadata;
 
@@ -121,73 +120,6 @@ void Cy_SPI_AddressToArray(uint32_t value, uint8_t *byteArray,uint8_t numAddress
         value >>= 8; /* Shift to get the next byte */
     } while (numAddressBytes > 0U);
 } /* Cy_SPI_AddressToArray() */
-
-/******************************************************************************
-* Function name: Cy_App_QSPIStatus1Read(cy_en_smif_slave_select_t slaveSelect)
-*******************************************************************************
-*
-* Description: Function to read status1 register of selected SPI flash
-* 32-bit value to be converted
-*
-* \param slaveSelect
-* SPI Flash Index
-*
-*
-* \return
-* register value
-*
-******************************************************************************/
-uint8_t Cy_App_QSPIStatus1Read(cy_en_smif_slave_select_t slaveSelect)
-{
-    uint8_t statusVal = 0;
-    Cy_SMIF_TransmitCommand(SMIF0,
-                            CY_APP_QSPI_STATUS_1_READ_CMD,
-                            CY_SMIF_WIDTH_SINGLE,
-                            NULL,
-                            CY_SMIF_CMD_WITHOUT_PARAM,
-                            CY_SMIF_WIDTH_NA,
-                            slaveSelect,
-                            CY_SMIF_TX_NOT_LAST_BYTE,
-                            &qspiContext);
-
-    Cy_SMIF_ReceiveDataBlocking(SMIF0, &statusVal, 1u, CY_SMIF_WIDTH_SINGLE, &qspiContext);
-    DBG_APP_TRACE("SLV%d:Status Register 01: 0x%x\r\n",slaveSelect-1,statusVal);
-    return statusVal;
-} /* End of Cy_App_QSPIStatus1Read() */
-
-/******************************************************************************
-* Function name: Cy_App_QSPIStatus2Read(cy_en_smif_slave_select_t slaveSelect)
-*******************************************************************************
-*
-* Description: Function to read status2 register of selected SPI flash
-* 32-bit value to be converted
-*
-* \param slaveSelect
-* SPI Flash Index
-*
-*
-* \return
-* register value
-*
-******************************************************************************/
-uint8_t Cy_App_QSPIStatus2Read(cy_en_smif_slave_select_t slaveSelect)
-{
-    uint8_t statusVal = 0;
-    Cy_SMIF_TransmitCommand(SMIF0,
-                            CY_APP_QSPI_STATUS_2_READ_CMD,
-                            CY_SMIF_WIDTH_SINGLE,
-                            NULL,
-                            CY_SMIF_CMD_WITHOUT_PARAM,
-                            CY_SMIF_WIDTH_NA,
-                            slaveSelect,
-                            CY_SMIF_TX_NOT_LAST_BYTE,
-                            &qspiContext);
-
-    Cy_SMIF_ReceiveDataBlocking(SMIF0, &statusVal, 1u, CY_SMIF_WIDTH_SINGLE, &qspiContext);
-    DBG_APP_TRACE("SLV%d:Status Register 02: 0x%x\r\n",slaveSelect-1,statusVal);
-    return statusVal;
-} /* End of Cy_App_QSPIStatus2Read */
-
 
 /******************************************************************************
 * Function name: Cy_QSPI_WriteEnable(cy_en_flash_index_t flashIndex)
@@ -275,6 +207,7 @@ static cy_en_smif_status_t Cy_QSPI_WriteEnable(cy_en_flash_index_t flashIndex)
 ******************************************************************************/
 void Cy_QSPI_ReadID(cy_en_smif_slave_select_t slaveSelect, uint8_t *idBuffer)
 {
+    cy_en_smif_status_t status = CY_SMIF_SUCCESS;
     Cy_SMIF_TransmitCommand(SMIF0,
                             CY_APP_QSPI_READ_ID_CMD,
                             CY_SMIF_WIDTH_SINGLE,
@@ -285,57 +218,11 @@ void Cy_QSPI_ReadID(cy_en_smif_slave_select_t slaveSelect, uint8_t *idBuffer)
                             CY_SMIF_TX_NOT_LAST_BYTE,
                             &qspiContext);
 
-    Cy_SMIF_ReceiveDataBlocking(SMIF0, idBuffer, CY_APP_QSPI_ID_SIZE,
+    status = Cy_SMIF_ReceiveDataBlocking(SMIF0, idBuffer, CY_APP_QSPI_ID_SIZE,
                                 CY_SMIF_WIDTH_SINGLE, &qspiContext);
-
+    ASSERT_NON_BLOCK(status == CY_SMIF_SUCCESS, status);
     DBG_APP_TRACE("SLV%d:QSPI ID:",slaveSelect-1);
 } /* End of Cy_QSPI_ReadID() */
-
-/******************************************************************************
-* Function name: Cy_QSPI_IsMemBusy(cy_en_flash_index_t flashIndex)
-*******************************************************************************
-*
-* Description: Function to check if Write In Progress (WIP) bit of the flash is cleared
-*
-* \param flashIndex
-* SPI Flash Index
-*
-* \return
-* status
-*
-******************************************************************************/
-bool Cy_QSPI_IsMemBusy(cy_en_flash_index_t flashIndex)
-{
-    cy_en_smif_status_t status = CY_SMIF_SUCCESS;
-    uint8_t statusVal;
-    if(flashIndex == DUAL_SPI_FLASH)
-    {
-        DBG_APP_ERR("[%s]Invalid flashIndex. Access both flash memories separately\r\n",__func__);
-        return CY_SMIF_BAD_PARAM;
-    }
-
-    status = Cy_SMIF_TransmitCommand(SMIF_HW,
-            CY_SPI_STATUS_READ_CMD,
-            glCommandWidth[flashIndex],
-            NULL,
-            CY_SMIF_CMD_WITHOUT_PARAM,
-            CY_SMIF_WIDTH_NA,
-            (cy_en_smif_slave_select_t)glSlaveSelectIndex[flashIndex],
-            CY_SMIF_TX_NOT_LAST_BYTE,
-            &qspiContext);
-
-    ASSERT_NON_BLOCK(status == CY_SMIF_SUCCESS, status);
-
-    status = Cy_SMIF_ReceiveDataBlocking(SMIF_HW,
-            &statusVal,
-            1u,
-            glReadWriteWidth[flashIndex],
-            &qspiContext);
-    ASSERT_NON_BLOCK(status == CY_SMIF_SUCCESS, status);
-
-    /* If the Memory is busy, it returns true */
-    return ((statusVal & 0x01) == 0x01);
-} /* End of Cy_QSPI_IsMemBusy() */
 
 /******************************************************************************
 * Function name: Cy_SPI_ReadConfigRegister(cy_en_flash_index_t flashIndex, uint8_t *readValue)
@@ -489,97 +376,6 @@ static cy_en_smif_status_t  Cy_QSPI_WriteAnyRegister(cy_en_flash_index_t flashIn
 } /* End of Cy_QSPI_WriteAnyRegister() */
 
 /******************************************************************************
-* Function name: Cy_SPI_ReadCFIMap(cy_stc_cfi_flash_map_t *cfiFlashMap, cy_en_flash_index_t flashIndex)
-*******************************************************************************
-*
-* Description: Function to read Common Flash Interface (CFI) Table
-*
-*
-* \param cfiFlashMap
-* CFI Flash Table pointer
-*
-* \param flashIndex
-* SPI Flash Index
-*
-* \return
-* status
-*
-******************************************************************************/
-static cy_en_smif_status_t Cy_SPI_ReadCFIMap (cy_stc_cfi_flash_map_t *cfiFlashMap, cy_en_flash_index_t flashIndex)
-{
-    uint8_t sectorIndex = 0;
-    uint8_t eraseRegionIndex = 0;
-    uint8_t rxBuffer[CY_CFI_TABLE_LENGTH] = {0};
-    cy_en_smif_status_t status = CY_SMIF_SUCCESS;
-
-    if(flashIndex == DUAL_SPI_FLASH)
-    {
-        DBG_APP_ERR("[%s]Invalid flashIndex. Access both flash memories separately\r\n",__func__);
-        return CY_SMIF_BAD_PARAM;
-    }
-
-    status = Cy_SMIF_TransmitCommand(SMIF_HW,
-            CY_SPI_READ_ID_CMD,
-            glCommandWidth[flashIndex],
-            NULL,
-            CY_SMIF_CMD_WITHOUT_PARAM,
-            CY_SMIF_WIDTH_NA,
-            (cy_en_smif_slave_select_t)glSlaveSelectIndex[flashIndex],
-            CY_SMIF_TX_NOT_LAST_BYTE,
-            &qspiContext);
-    ASSERT_NON_BLOCK(status == CY_SMIF_SUCCESS, status);
-
-    status = Cy_SMIF_ReceiveDataBlocking(SMIF_HW, rxBuffer, CY_CFI_TABLE_LENGTH, glReadWriteWidth[flashIndex], &qspiContext);
-    ASSERT_NON_BLOCK(status == CY_SMIF_SUCCESS, status);
-    cfiFlashMap->deviceSizeFactor = rxBuffer[CY_CFI_DEVICE_SIZE_OFFSET];
-    cfiFlashMap->deviceSize = (uint32_t)(1u << cfiFlashMap->deviceSizeFactor);
-    DBG_APP_INFO("DeviceSize = 0x%x[%d]\r\n", (cfiFlashMap->deviceSize), (cfiFlashMap->deviceSize));
-
-    /* Parse the CFI buffer and understand possible memory array layouts */
-    cfiFlashMap->numEraseRegions = rxBuffer[CY_CFI_NUM_ERASE_REGION_OFFSET];
-    DBG_APP_INFO("Number of erase regions = %d\r\n", cfiFlashMap->numEraseRegions);
-
-    if(cfiFlashMap->numEraseRegions < CY_CFI_TABLE_LENGTH)
-    {
-        //The part has multiple erase layouts, possibly because it supports hybrid layout
-        for(eraseRegionIndex = 0 , sectorIndex = 0;
-                eraseRegionIndex < (cfiFlashMap->numEraseRegions);
-                eraseRegionIndex++, sectorIndex += CY_CFI_ERASE_REGION_SIZE_INFO_SIZE)
-        {
-            cfiFlashMap->memoryLayout[eraseRegionIndex].numSectors = 1 + (rxBuffer[sectorIndex + CY_CFI_ERASE_NUM_SECTORS_OFFSET] |
-                    (rxBuffer[sectorIndex + CY_CFI_ERASE_NUM_SECTORS_OFFSET + 1] << 8));
-
-            cfiFlashMap->memoryLayout[eraseRegionIndex].sectorSize = 256 * (rxBuffer[sectorIndex + CY_CFI_ERASE_SECTOR_SIZE_OFFSET] |
-                    (rxBuffer[sectorIndex + CY_CFI_ERASE_SECTOR_SIZE_OFFSET + 1] << 8));
-            if(eraseRegionIndex)
-            {
-                cfiFlashMap->memoryLayout[eraseRegionIndex].startingAddress = (cfiFlashMap->memoryLayout[eraseRegionIndex - 1].startingAddress +
-                        cfiFlashMap->memoryLayout[eraseRegionIndex - 1].sectorSize *
-                        cfiFlashMap->memoryLayout[eraseRegionIndex - 1].numSectors);
-            }
-            else
-            {
-                cfiFlashMap->memoryLayout[eraseRegionIndex].startingAddress = 0;
-            }
-
-            cfiFlashMap->memoryLayout[eraseRegionIndex].lastAddress = cfiFlashMap->memoryLayout[eraseRegionIndex].startingAddress +
-                cfiFlashMap->memoryLayout[eraseRegionIndex].sectorSize - 1;
-
-            if(cfiFlashMap->memoryLayout[eraseRegionIndex].sectorSize == 0x1000)
-            {
-                cfiFlashMap->num4KBParameterRegions++;
-            }
-
-            DBG_APP_TRACE("Erase region:%d, numSectors=%d, sectorSize=0x%x, startingAddress=0x%x\r\n",eraseRegionIndex,
-                    cfiFlashMap->memoryLayout[eraseRegionIndex].numSectors,
-                    cfiFlashMap->memoryLayout[eraseRegionIndex].sectorSize,
-                    cfiFlashMap->memoryLayout[eraseRegionIndex].startingAddress);
-        }
-    }
-    return status;
-} /* End of Cy_SPI_ReadCFIMap() */
-
-/******************************************************************************
 * Function name: Cy_SPI_ReadID(uint8_t *rxBuffer, cy_en_flash_index_t flashIndex)
 *******************************************************************************
 *
@@ -671,13 +467,11 @@ cy_en_smif_status_t Cy_SPI_FlashInit (cy_en_flash_index_t flashIndex, bool quadE
         glReadWriteWidth[flashIndex]  = CY_SMIF_WIDTH_QUAD;
         if(qpiEnable)
         {
-        regValue = Cy_QSPI_ReadAnyRegister(flashIndex, CY_SFS256_CR2V_REG);
-        Cy_QSPI_WriteAnyRegister(flashIndex, CY_SFS256_CR2V_REG, regValue | 0x40);
+            regValue = Cy_QSPI_ReadAnyRegister(flashIndex, CY_SFS256_CR2V_REG);
+            Cy_QSPI_WriteAnyRegister(flashIndex, CY_SFS256_CR2V_REG, regValue | 0x40);
             glCommandWidth[flashIndex]    = CY_SMIF_WIDTH_QUAD;
         }
     }
-    status = Cy_SPI_ReadCFIMap(&glCfiFlashMap[flashIndex], flashIndex);
-    ASSERT_NON_BLOCK(status == CY_SMIF_SUCCESS, status);
 
     Cy_SPI_ReadID(flashID, flashIndex);
 
@@ -714,7 +508,6 @@ cy_en_smif_status_t Cy_SPI_FlashInit (cy_en_flash_index_t flashIndex, bool quadE
 * status
 *
 ******************************************************************************/
-
 cy_en_smif_status_t Cy_QSPI_Read(uint32_t address, uint8_t *rxBuffer, uint32_t length, cy_en_flash_index_t flashIndex)
 {
     cy_en_smif_status_t status = CY_SMIF_SUCCESS;
@@ -1237,7 +1030,7 @@ bool Cy_FPGAConfigure(cy_stc_usb_app_ctxt_t *pAppCtxt, cy_en_fpgaConfigMode_t mo
 
         Cy_GPIO_Set(T120_INIT_RESET_PORT, T120_INIT_RESET_PIN);
 
-        Cy_SysLib_Delay(6); /*Minimum time between deassertion of CRESET_N to first valid configuration data.*/
+        Cy_SysLib_Delay(6); /*Minimum time between de-assertion of CRESET_N to first valid configuration data.*/
 
         // Passive x4 - One clock cycle shifts out 4 bits. Two clock cycles => 1 byte. For X bytes, X *2 clock cycles are required
         uint32_t cycles = MAX_DUMMY_CYCLES_COUNT;
@@ -1302,7 +1095,7 @@ bool Cy_FPGAConfigure(cy_stc_usb_app_ctxt_t *pAppCtxt, cy_en_fpgaConfigMode_t mo
         {
             glIsFPGAConfigured = true;
             Cy_Debug_AddToLog(3, CYAN);
-            Cy_Debug_AddToLog (3,"FPGA Configuration Done \n\r");
+            Cy_Debug_AddToLog(3,"FPGA Configuration Done \n\r");
             Cy_Debug_AddToLog(3, COLOR_RESET);
             Cy_GPIO_Clr(HDMI_KIT_FPGA_SOFTRESET_PORT,HDMI_KIT_FPGA_SOFTRESET_PIN);
             Cy_SysLib_Delay(10);

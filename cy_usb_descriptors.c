@@ -6,7 +6,7 @@
 *
 *******************************************************************************
 * \copyright
-* (c) (2021-2023), Cypress Semiconductor Corporation (an Infineon company) or
+* (c) (2021-2026), Cypress Semiconductor Corporation (an Infineon company) or
 * an affiliate of Cypress Semiconductor Corporation.
 *
 * SPDX-License-Identifier: Apache-2.0
@@ -108,7 +108,7 @@ const uint8_t BosDescriptor[] = {
     0x03,                           /* Functionality support */
     0x00,                           /* U1 device exit latency */
     0x00,0x00,                      /* U2 device exit latency */
-    
+
     /* PTM device capability*/
     0x03,                           /* Descriptor size */
     0x10,                           /* Device capability type descriptor */
@@ -142,7 +142,7 @@ const uint8_t SuperSpeedConfigDescr[] = {
     USB3_NUM_INTERFACES,            /* Number of interfaces: */
     0x01,                           /* Configuration number */
     0x00,                           /* Configuration string index */
-    0x80,                           /* Config characteristics - Bus powered */
+    0xA0,                           /* Config characteristics - Bus powered with remote wake support*/
     0x32,                           /* Max power consumption of device (in 8mA unit) : 400mA */
 
     /******************************************************************************
@@ -365,7 +365,7 @@ const uint8_t SuperSpeedConfigDescr[] = {
     0x0B,0x8B,0x02,0x00,            /* Default frame interval (in 100ns units):((1/60)*10^7)=166667 ie 60fps */
     0x01,                           /* Frame interval type : No of discrete intervals */
     0x0B,0x8B,0x02,0x00,            /* 60fps */
-    
+
     /* Class specific Uncompressed VS frame descriptor - 2 (1920*1080 p) @60 fps */
     0x1E,                           /* Descriptor size */
     0x24,                           /* Descriptor type*/
@@ -401,7 +401,7 @@ const uint8_t SuperSpeedConfigDescr[] = {
     0x24,                           /* Class-specific VS i/f type */
     0x05,                           /* Descriptor Subtype : Uncompressed */
     CY_USB_UVC_SS_VGA_FRAME_INDEX,  /* Frame desciptor index  */
-    0x00,                           /* Still image capture method not supported */ 
+    0x00,                           /* Still image capture method not supported */
     0x80,0x02,                      /* Width in pixel:  640 */
     0xE0,0x01,                      /* Height of the frame : 480 */
     0x00,0x00,0x65,0x04,            /* Min bit rate bits/s: 640*480*2*8*15 = 0x04650000 */
@@ -599,7 +599,7 @@ const uint8_t HighSpeedConfigDescr[] = {
 #endif /* CY_VENDOR_IF_EN */
     0x01,                           /* Configuration number */
     0x00,                           /* Configuration string index */
-    0x80,                           /* Config characteristics - bus powered */
+    0xA0,                           /* Config characteristics - bus powered with remote wake support*/
     0xC8,                           /* Max power consumption of device (in 2mA unit) : 400mA */
 
     /* Interface association descriptor */
