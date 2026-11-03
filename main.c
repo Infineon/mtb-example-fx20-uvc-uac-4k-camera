@@ -347,6 +347,7 @@ void Cy_LVDS_PhyEventCb(uint8_t smNo, cy_en_lvds_phy_events_t phyEvent,
         DBG_APP_INFO("L3_Entry Port:%d\r\n", smNo);
     }
 #endif /*LVDS_LOW_POWER_EN*/
+
     if (phyEvent == CY_LVDS_PHY_TRAINING_DONE) {
         DBG_APP_TRACE("Port %d PHY Train Done\r\n", smNo);
         SET_BIT(glPhyLinkTrainControl, PHY_TRAINING_DONE);
@@ -389,11 +390,11 @@ void Cy_LVDS_PhyEventCb(uint8_t smNo, cy_en_lvds_phy_events_t phyEvent,
  *****************************************************************************/
 void Cy_LVDS_LowPowerEventCb(cy_en_lvds_low_power_events_t lowPowerEvent,
                              void *cntxt) {
-    DBG_APP_INFO("Cy_LVDS_LowPowerEventCb\r\n");
 #if LVDS_LOW_POWER_EN
     cy_stc_usb_app_ctxt_t *pAppCtxt = (cy_stc_usb_app_ctxt_t *)cntxt;
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     cy_stc_usbd_app_msg_t xMsg;
+
     if (lowPowerEvent == CY_LVDS_LOW_POWER_LNK0_L3_EXIT) {
         Cy_LVDS_L3_Exit(LVDSSS_LVDS, &lvdsContext, 0);
         CLR_BIT(pAppCtxt->bmLinkL3EnterStatus, 1 << 0);
@@ -409,9 +410,12 @@ void Cy_LVDS_LowPowerEventCb(cy_en_lvds_low_power_events_t lowPowerEvent,
         CLR_BIT(pAppCtxt->bmLinkL3EnterStatus, 1 << 1);
         DBG_APP_INFO("P1_L3_Exit\r\n");
     }
+
     xMsg.type = CY_LVDS_RETRAIN;
     xQueueSendFromISR(appCtxt.uvcMsgQueue, &(xMsg), &(xHigherPriorityTaskWoken));
-#endif
+#else
+    DBG_APP_INFO("Cy_LVDS_LowPowerEventCb\r\n");
+#endif /* LVDS_LOW_POWER_EN */
 } /* End of Cy_LVDS_LowPowerEventCb() */
 
 /*****************************************************************************
@@ -705,11 +709,13 @@ void Cy_App_LvdsRetraining(cy_stc_usb_app_ctxt_t *pAppCtxt)
 {
     cy_en_lvds_status_t lvdsStatus = CY_LVDS_SUCCESS;
     cy_en_scb_i2c_status_t i2c_status;
+
     LOG_COLOR("Initiate LVDS Retraining\r\n");
     glIsLVDSLink1TrainingDone = false;
     glIsLVDSLink0TrainingDone = false;
     glIsLVDSPhyTrainingDone = false;
     CLR_BIT(glPhyLinkTrainControl, PHY_TRAINING_DONE | P0_TRAINING_DONE | P1_TRAINING_DONE);
+
 #if CUSTOM_TRAIN_ENABLE
     /* Apply the previously identified optimal slave DLL phases. */
     Cy_LVDS_CustomTraining_ApplyResults(&lvdsContext, PORT1_EN);
@@ -723,50 +729,49 @@ void Cy_App_LvdsRetraining(cy_stc_usb_app_ctxt_t *pAppCtxt)
      * Run through PHY training. When custom training is enabled, this is still
      * needed so that the receiver can identify the byte boundaries correctly.
      */
-    lvdsStatus = Cy_LVDS_PhyTrainingStart(LVDSSS_LVDS, PORT1_EN,
-                                          cy_lvds0_config.phyConfig);
+    lvdsStatus = Cy_LVDS_PhyTrainingStart(LVDSSS_LVDS, PORT1_EN, cy_lvds0_config.phyConfig);
     ASSERT_NON_BLOCK(lvdsStatus == CY_LVDS_SUCCESS, lvdsStatus);
     vTaskDelay(5);
-        if (glIsLVDSPhyTrainingDone) {
-            i2c_status =
-                Cy_I2C_Write(FPGASLAVE_ADDR, FPGA_PHY_LINK_CONTROL_ADDRESS,
-                             glPhyLinkTrainControl, FPGA_I2C_ADDRESS_WIDTH,
-                             FPGA_I2C_DATA_WIDTH);
-            ASSERT_NON_BLOCK(i2c_status == CY_SCB_I2C_SUCCESS, i2c_status);
-        }
 
-        if (glIsLVDSLink0TrainingDone) {
-            i2c_status =
-                Cy_I2C_Write(FPGASLAVE_ADDR, FPGA_PHY_LINK_CONTROL_ADDRESS,
-                             glPhyLinkTrainControl, FPGA_I2C_ADDRESS_WIDTH,
-                             FPGA_I2C_DATA_WIDTH);
-            ASSERT_NON_BLOCK(i2c_status == CY_SCB_I2C_SUCCESS, i2c_status);
-        }
+    if (glIsLVDSPhyTrainingDone) {
+        i2c_status =
+            Cy_I2C_Write(FPGASLAVE_ADDR, FPGA_PHY_LINK_CONTROL_ADDRESS,
+                    glPhyLinkTrainControl, FPGA_I2C_ADDRESS_WIDTH,
+                    FPGA_I2C_DATA_WIDTH);
+        ASSERT_NON_BLOCK(i2c_status == CY_SCB_I2C_SUCCESS, i2c_status);
+    }
 
-        if (glIsLVDSLink1TrainingDone) {
-            SET_BIT(glPhyLinkTrainControl, P1_TRAINING_DONE);
-            i2c_status =
-                Cy_I2C_Write(FPGASLAVE_ADDR, FPGA_PHY_LINK_CONTROL_ADDRESS,
-                             glPhyLinkTrainControl, FPGA_I2C_ADDRESS_WIDTH,
-                             FPGA_I2C_DATA_WIDTH);
-            ASSERT_NON_BLOCK(i2c_status == CY_SCB_I2C_SUCCESS, i2c_status);
-        }
-        DBG_APP_INFO("LVDSLink0Training %d LVDSLink1Training %d \r\n",
-                     glIsLVDSLink0TrainingDone, glIsLVDSLink1TrainingDone);
+    if (glIsLVDSLink0TrainingDone) {
+        i2c_status =
+            Cy_I2C_Write(FPGASLAVE_ADDR, FPGA_PHY_LINK_CONTROL_ADDRESS,
+                    glPhyLinkTrainControl, FPGA_I2C_ADDRESS_WIDTH,
+                    FPGA_I2C_DATA_WIDTH);
+        ASSERT_NON_BLOCK(i2c_status == CY_SCB_I2C_SUCCESS, i2c_status);
+    }
+
+    if (glIsLVDSLink1TrainingDone) {
+        SET_BIT(glPhyLinkTrainControl, P1_TRAINING_DONE);
+        i2c_status =
+            Cy_I2C_Write(FPGASLAVE_ADDR, FPGA_PHY_LINK_CONTROL_ADDRESS,
+                    glPhyLinkTrainControl, FPGA_I2C_ADDRESS_WIDTH,
+                    FPGA_I2C_DATA_WIDTH);
+        ASSERT_NON_BLOCK(i2c_status == CY_SCB_I2C_SUCCESS, i2c_status);
+    }
+
+    DBG_APP_INFO("LVDSLink0Training %d LVDSLink1Training %d \r\n",
+            glIsLVDSLink0TrainingDone, glIsLVDSLink1TrainingDone);
+
     /* Enable Thread0 by default. */
     Cy_LVDS_GpifThreadConfig(LVDSSS_LVDS, CY_LVDS_GPIF_THREAD_0, 0, 0, 1, 4);
 
     Cy_USBD_AddEvtToLog(&usbdCtxt, CY_USB_EVT_LVDS_EN);
+
     lvdsStatus = Cy_LVDS_GpifSMStart(LVDSSS_LVDS, PORT1_EN, 0, 0);
     ASSERT_NON_BLOCK(CY_LVDS_SUCCESS == lvdsStatus, lvdsStatus);
 
-    // i2cStatus = Cy_FPGA_I2CRegWrite(DEVICE0_OFFSET +
-    // FPGA_DEVICE_STREAM_ENABLE_ADDRESS, CAMERA_APP_ENABLE);
-    // ASSERT_NON_BLOCK(i2cStatus == CY_SCB_I2C_SUCCESS, i2cStatus);
     LOG_COLOR("LVDS Retraining Done\r\n");
-    // return lvdsStatus;
 }
-#endif /*LVDS_LOW_POWER_EN*/
+#endif /* LVDS_LOW_POWER_EN */
 
 /******************************************************************************
 * Function Name: cy_usb_get_lvds_phy_gear_ratio(void)
@@ -878,18 +883,20 @@ void Cy_LVDS_LVCMOS_Init (void)
 
         Cy_LVDS_SetInterruptMask(LVDSSS_LVDS, smIntrMask);
         DBG_APP_INFO("Set Interrupt Mask for GPIF-SM\r\n");
+
 #if LVDS_LOW_POWER_EN
-    /* Allow entry to LVDS L1 and L3 states */
-    Cy_LVDS_AllowL1Entry(LVDSSS_LVDS, CY_LVDS_LVCMOS_PORT_0);
-    Cy_LVDS_AllowL1Entry(LVDSSS_LVDS, CY_LVDS_LVCMOS_PORT_1);
+        /* Allow entry to LVDS L1 and L3 states */
+        Cy_LVDS_AllowL1Entry(LVDSSS_LVDS, CY_LVDS_LVCMOS_PORT_0);
+        Cy_LVDS_AllowL1Entry(LVDSSS_LVDS, CY_LVDS_LVCMOS_PORT_1);
 
-    Cy_LVDS_AllowL3Entry(LVDSSS_LVDS, CY_LVDS_LVCMOS_PORT_0);
-    Cy_LVDS_AllowL3Entry(LVDSSS_LVDS, CY_LVDS_LVCMOS_PORT_1);
+        Cy_LVDS_AllowL3Entry(LVDSSS_LVDS, CY_LVDS_LVCMOS_PORT_0);
+        Cy_LVDS_AllowL3Entry(LVDSSS_LVDS, CY_LVDS_LVCMOS_PORT_1);
 
-    /* Enable interrupts on wakeup from L3 exit for Link 0 and Link 1 */
-    Cy_LVDS_SetWakeupInterruptMask(LVDSSS_LVDS, LVDSSS_LVDS_LVDS_LOW_PWR_INTR_LVDS_WAKEUP_INTR_SET_LNK0_L3_EXIT_Msk
-            | LVDSSS_LVDS_LVDS_LOW_PWR_INTR_LVDS_WAKEUP_INTR_SET_LNK1_L3_EXIT_Msk);
-#endif
+        /* Enable interrupts on wakeup from L3 exit for Link 0 and Link 1 */
+        Cy_LVDS_SetWakeupInterruptMask(LVDSSS_LVDS, LVDSSS_LVDS_LVDS_LOW_PWR_INTR_LVDS_WAKEUP_INTR_SET_LNK0_L3_EXIT_Msk
+                | LVDSSS_LVDS_LVDS_LOW_PWR_INTR_LVDS_WAKEUP_INTR_SET_LNK1_L3_EXIT_Msk);
+#endif /* LVDS_LOW_POWER_EN */
+
        /* Register callbacks with the LVDS driver. */
         Cy_LVDS_RegisterCallback(LVDSSS_LVDS, &cb, &lvdsContext, &appCtxt);
 

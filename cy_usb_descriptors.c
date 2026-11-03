@@ -1015,8 +1015,9 @@ const uint8_t FullSpeedStringDescr[] = {
 };
 
 /* Binary Object Store (BOS) Descriptor to be used in SuperSpeedPlus connection. */
-USB3_DESC_ATTRIBUTES uint8_t CyFxBOSDscr_Gen2[] =
-{
+USB3_DESC_ATTRIBUTES uint8_t CyFxBOSDscr_Gen2[64];
+
+const uint8_t BosGen2Descriptor[] = {
     0x05,                           /* Descriptor size */
     0x0F,                           /* BOS descriptor. */
     0x2D,0x00,                      /* Length of this descriptor and all sub-descriptors */
@@ -1075,6 +1076,7 @@ void CopyDescriptorsToHBRam (void)
     memcpy (CyFxUSBManufactureDscr, MfgStringDescr, sizeof(MfgStringDescr));
     memcpy (CyFxUSBProductDscr, ProdStringDescr, sizeof(ProdStringDescr));
     memcpy (CyFxUSBFSDscr, FullSpeedStringDescr, sizeof(FullSpeedStringDescr));
+    memcpy (CyFxBOSDscr_Gen2, BosGen2Descriptor, sizeof(BosGen2Descriptor));
 }
 
 void CyApp_RegisterUsbDescriptors(cy_stc_usb_app_ctxt_t *pAppCtxt, cy_en_usb_speed_t usbSpeed)

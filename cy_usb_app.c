@@ -238,7 +238,7 @@ uint8_t cy_uvc_header_[] = {
     0x00, 0x00, 0x00, 0x00, 0x00        /* Zero padding for 32 byte align */
 };
 
-HBDMA_BUF_ATTRIBUTES uint32_t Ep0TestBuffer[32U];
+HBDMA_BUF_ATTRIBUTES uint32_t Ep0XferBuffer[32U];
 HBDMA_BUF_ATTRIBUTES uint32_t SetSelDataBuffer[8];
 
 /******************************************************************************
@@ -968,8 +968,9 @@ cy_en_scb_i2c_status_t Cy_FPGAPhyLnkTraining (void)
 ******************************************************************************/
 cy_en_scb_i2c_status_t Cy_UVC_SetVideoResolution (uint32_t format_index, uint32_t resolution_index, cy_en_usb_speed_t devSpeed)
 {
-    cy_en_scb_i2c_status_t status = 0;
+    cy_en_scb_i2c_status_t status = CY_SCB_I2C_SUCCESS;
     uint8_t regValue = 0;
+
     DBG_APP_INFO("format_index %d resolution_index %d devSpeed = %d\r\n",  format_index,resolution_index, devSpeed);
     if(devSpeed >= CY_USBD_USB_DEV_SS_GEN1)
     {
@@ -1096,6 +1097,7 @@ void Cy_UVC_FpgaStatusCheck(cy_stc_usb_app_ctxt_t *pAppCtxt)
     static uint8_t fpgaCommonRegStatusPrev = 0;
     uint8_t fpgaStatusCurrent;
     cy_en_scb_i2c_status_t  status = CY_SCB_I2C_SUCCESS;
+    BaseType_t pdStatus;
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     cy_stc_usbd_app_msg_t xMsg;
 
@@ -1129,8 +1131,8 @@ void Cy_UVC_FpgaStatusCheck(cy_stc_usb_app_ctxt_t *pAppCtxt)
     if (pAppCtxt->printStartupMessage)
     {
         xMsg.type = CY_USB_STARTUP_PRINT_EVENT;
-        status = xQueueSendFromISR(pAppCtxt->uvcMsgQueue, &(xMsg), &(xHigherPriorityTaskWoken));
-        ASSERT_NON_BLOCK(pdTRUE == status,status);
+        pdStatus = xQueueSendFromISR(pAppCtxt->uvcMsgQueue, &(xMsg), &(xHigherPriorityTaskWoken));
+        ASSERT_NON_BLOCK(pdTRUE == pdStatus, status);
     }
 
 
@@ -1283,7 +1285,7 @@ static void Cy_UVC_AppStart(cy_stc_usb_app_ctxt_t *pAppCtxt,
                             uint32_t format_index, uint32_t frame_index)
 {
     cy_en_hbdma_mgr_status_t mgrStatus;
-    DBG_APP_INFO("AppStart cy_uvc_IsApplnActive %d\r\n",cy_uvc_IsApplnActive);
+    DBG_APP_TRACE("AppStart cy_uvc_IsApplnActive %d\r\n",cy_uvc_IsApplnActive);
 
     if (!cy_uvc_IsApplnActive)
     {
@@ -1385,7 +1387,7 @@ void Cy_UVC_AppSetCurRqtHandler (cy_stc_usb_app_ctxt_t *pAppCtxt, uint16_t wLeng
     uint32_t status;
     uint16_t loopCnt = 250u;
 
-    DBG_APP_INFO("UVC_SET_CUR_REQ wValue = 0x%x wIndex = 0x%x\r\n",wValue, pAppCtxt->wIndex);
+    DBG_APP_TRACE("UVC_SET_CUR_REQ wValue = 0x%x wIndex = 0x%x\r\n",wValue, pAppCtxt->wIndex);
 
     /* Read the data out commitctrl buffer */
     status = Cy_USB_USBD_RecvEndp0Data(pUsbdCtxt, cy_uvc_commitctrl, wLength);
@@ -1438,8 +1440,8 @@ void Cy_UVC_AppSetCurRqtHandler (cy_stc_usb_app_ctxt_t *pAppCtxt, uint16_t wLeng
                 DBG_APP_ERR("Error FrameIndex\r\n");
                 cy_uvc_currentFrameIndex = CY_USB_UVC_SS_4K_FRAME_INDEX;
             }
-            DBG_APP_INFO("cy_usb_full_buffer_no%d\r\n",cy_usb_full_buffer_no);
-            DBG_APP_INFO("cy_usb_no_bytes_last_buffer%d \r\n",cy_usb_no_bytes_last_buffer);
+            DBG_APP_TRACE("cy_usb_full_buffer_no%d\r\n",cy_usb_full_buffer_no);
+            DBG_APP_TRACE("cy_usb_no_bytes_last_buffer%d \r\n",cy_usb_no_bytes_last_buffer);
         }
         else /* HS speed */
         {
@@ -1479,6 +1481,73 @@ void Cy_UVC_AppSetCurRqtHandler (cy_stc_usb_app_ctxt_t *pAppCtxt, uint16_t wLeng
     }
 } /* End of Cy_UVC_AppSetCurRqtHandler() */
 
+/*****************************************************************************
+* Function Name: Cy_UVC_AppGetCurRqtHandler(cy_stc_usb_app_ctxt_t *pAppCtxt)
+******************************************************************************
+* Summary:
+* This function handles the GET_CUR request addresses to the UVC video streaming interface.
+*
+* Parameters:
+* \param pAppCtxt
+* application layer context pointer
+*
+* Return:
+* void
+*****************************************************************************/
+void Cy_UVC_AppGetCurRqtHandler (cy_stc_usb_app_ctxt_t *pAppCtxt)
+{
+    cy_en_usbd_ret_code_t retStatus = CY_USBD_STATUS_SUCCESS;
+
+    if (pAppCtxt->devSpeed > CY_USBD_USB_DEV_HS)
+    {
+        switch (cy_uvc_currentFrameIndex)
+        {
+            case CY_USB_UVC_SS_4K_FRAME_INDEX:
+                retStatus = Cy_USB_USBD_SendEndp0Data(pAppCtxt->pUsbdCtxt,
+                        (uint8_t *)cy_uvc_probectrl_4K, CY_USB_UVC_MAX_PROBE_SETTING);
+                break;
+
+            case CY_USB_UVC_SS_720P_FRAME_INDEX:
+                retStatus = Cy_USB_USBD_SendEndp0Data(pAppCtxt->pUsbdCtxt,
+                        (uint8_t *)cy_uvc_probectrl_720p, CY_USB_UVC_MAX_PROBE_SETTING);
+                break;
+
+            case CY_USB_UVC_SS_1080P_FRAME_INDEX:
+                retStatus = Cy_USB_USBD_SendEndp0Data(pAppCtxt->pUsbdCtxt,
+                        (uint8_t *)cy_uvc_probectrl_1080p, CY_USB_UVC_MAX_PROBE_SETTING);
+                break;
+
+            case CY_USB_UVC_SS_VGA_FRAME_INDEX:
+                retStatus = Cy_USB_USBD_SendEndp0Data(pAppCtxt->pUsbdCtxt,
+                        (uint8_t *)cy_uvc_probectrl_VGA, CY_USB_UVC_MAX_PROBE_SETTING);
+                break;
+
+            default:
+                DBG_APP_ERR("currentFrameIndex\r\n");
+                Cy_USB_USBD_EndpSetClearStall(pAppCtxt->pUsbdCtxt, 0x00, CY_USB_ENDP_DIR_IN, true);
+                break;
+        }
+    }
+    else
+    {
+        if (cy_uvc_currentFrameIndex == CY_USB_UVC_HS_VGA_FRAME_INDEX)
+        {
+            retStatus = Cy_USB_USBD_SendEndp0Data(pAppCtxt->pUsbdCtxt,
+                    (uint8_t *)cy_uvc_probectrl_HS_VGA, CY_USB_UVC_MAX_PROBE_SETTING);
+        }
+        else
+        {
+            DBG_APP_ERR("currentFrameIndex\r\n");
+            Cy_USB_USBD_EndpSetClearStall(pAppCtxt->pUsbdCtxt, 0x00, CY_USB_ENDP_DIR_IN, true);
+        }
+    }
+
+    if (retStatus != CY_USBD_STATUS_SUCCESS)
+    {
+        DBG_APP_ERR("Error SendEndp0Data\r\n");
+    }
+}
+
 /******************************************************************************
 * Function Name: Cy_UVC_AppDeviceTaskHandler(void *pTaskParam)
 *******************************************************************************
@@ -1502,6 +1571,8 @@ void Cy_UVC_AppDeviceTaskHandler(void *pTaskParam)
     uint16_t wIndex;
     uint32_t dpslpcnt;
     bool IsDeepSlpExit;
+
+    (void)IsDeepSlpExit;
 
     /* Reset Frame Id in UVC Header */
     cy_uvc_header_[1] = CY_USB_UVC_HEADER_DEFAULT_BFH;
@@ -1582,30 +1653,6 @@ void Cy_UVC_AppDeviceTaskHandler(void *pTaskParam)
     appCtxt.printStartupMessage = true;
     for (;;)
     {
-        /* Check if the USB3 link has gone into U3.
-         * If yes, initiate L3 entry for LVDS link if LVDS_LOW_POWER_EN is set (1).
-         * Then put the device into deep sleep and wait for USB wakeup interrupt.
-         * On wakeup, inform the FPGA to exit from L3.
-         */
-        if (pAppCtxt->devSpeed > CY_USBD_USB_DEV_HS)
-        {
-            if (Cy_USBD_GetUSBPowerState(pAppCtxt->pUsbdCtxt) == CY_USBD_USBSS_LINK_U3)
-            {
-                dpslpcnt = 500;
-                do {
-                        Cy_SysLib_Delay(1);
-                        dpslpcnt--;
-                    } while ((Cy_USBD_GetUSBPowerState(pAppCtxt->pUsbdCtxt) == CY_USBD_USBSS_LINK_U3) && (dpslpcnt > 0));
-                if (Cy_USBD_GetUSBPowerState(pAppCtxt->pUsbdCtxt) == CY_USBD_USBSS_LINK_U3)
-                {
-                    pAppCtxt->devState = CY_USB_DEVICE_STATE_SUSPEND;
-#if DEEPSLEEP_EN
-                    queueMsg.type = CY_USB_ENTER_DEEPSLEEP;
-                    xQueueSend( pAppCtxt->uvcMsgQueue, &queueMsg, 0 );
-#endif
-                }
-            }
-        }
         /*
          * Wait until some data is received from the queue.
          * Timeout after 50 ms.
@@ -1669,9 +1716,13 @@ void Cy_UVC_AppDeviceTaskHandler(void *pTaskParam)
                 break;
 
             case CY_USB_UVC_DEVICE_SET_CUR_RQT:
-                DBG_APP_INFO("CY_USB_UVC_DEVICE_SET_CUR_RQT\r\n");
-                DBG_APP_INFO("queueMsg.data[0] = %d\r\n",queueMsg.data[0]);
+                DBG_APP_TRACE("CY_USB_UVC_DEVICE_SET_CUR_RQT\r\n");
+                DBG_APP_TRACE("queueMsg.data[0] = %d\r\n",queueMsg.data[0]);
                 Cy_UVC_AppSetCurRqtHandler(pAppCtxt, queueMsg.data[0], queueMsg.data[1]);
+                break;
+
+            case CY_USB_UVC_DEVICE_GET_CUR_RQT:
+                Cy_UVC_AppGetCurRqtHandler(pAppCtxt);
                 break;
 
             case CY_USB_UVC_VIDEO_STREAM_STOP_EVENT:
@@ -1694,70 +1745,97 @@ void Cy_UVC_AppDeviceTaskHandler(void *pTaskParam)
                 /* No action taken */
                 break;
 
+#if DEEPSLEEP_EN
             case CY_USB_ENTER_DEEPSLEEP:
-                if ((pAppCtxt->devState==CY_USB_DEVICE_STATE_SUSPEND) && (pAppCtxt->prevDevState==CY_USB_DEVICE_STATE_CONFIGURED))
-                    {
+                if (
+                        (pAppCtxt->devState == CY_USB_DEVICE_STATE_SUSPEND) &&
+                        (pAppCtxt->prevDevState==CY_USB_DEVICE_STATE_CONFIGURED))
+                {
                     if (pAppCtxt->devSpeed <= CY_USBD_USB_DEV_HS)
+                    {
+                        dpslpcnt = 50000;
+                        do {
+                            Cy_SysLib_DelayUs(10);
+                            dpslpcnt--;
+                        } while ((pAppCtxt->devState == CY_USB_DEVICE_STATE_SUSPEND) && (dpslpcnt > 0));
+                    }
+                    else
+                    {
+                        if (Cy_USBD_GetUSBPowerState(pAppCtxt->pUsbdCtxt) == CY_USBD_USBSS_LINK_U3)
                         {
-                            dpslpcnt = 500;
+                            dpslpcnt = 50000;
                             do {
-                                Cy_SysLib_Delay(1);
+                                Cy_SysLib_DelayUs(10);
                                 dpslpcnt--;
-                            } while ((pAppCtxt->devState == CY_USB_DEVICE_STATE_SUSPEND) && (dpslpcnt > 0));
+                            } while ((Cy_USBD_GetUSBPowerState(pAppCtxt->pUsbdCtxt) == CY_USBD_USBSS_LINK_U3) && (dpslpcnt > 0));
                         }
-                        if (pAppCtxt->devState == CY_USB_DEVICE_STATE_SUSPEND)
+
+                        if (Cy_USBD_GetUSBPowerState(pAppCtxt->pUsbdCtxt) != CY_USBD_USBSS_LINK_U3)
                         {
-                            DBG_APP_INFO("Entering DeepDleep\r\n");
-                            Cy_SysLib_DelayUs(1500);
-                            Cy_UVC_StreamStartStop(STOP);
-#if LVDS_LOW_POWER_EN
-                            /* Signal the FPGA to initiate L3 Entry */
-                            i2cStatus = Cy_I2C_Write(FPGASLAVE_ADDR, FPGA_LOW_PWR_MODE_ADDRESS, LVDS_L3_MODE_ENTER,
-                                                       FPGA_I2C_ADDRESS_WIDTH,FPGA_I2C_DATA_WIDTH);
-                            ASSERT_NON_BLOCK(i2cStatus == CY_SCB_I2C_SUCCESS, i2cStatus);
-#endif
-                            IsDeepSlpExit = false;
-                            if (Cy_USBD_EnterDeepsleep(pAppCtxt->pUsbdCtxt, pAppCtxt->pCpuDw1Base) == CY_USBD_STATUS_SUCCESS)
-                            {
-                                LVCMOS_EN?DBG_APP_INFO("Woke up from deep sleep\r\n") :\
-                                          DBG_APP_INFO("Woke up from deep sleep, initiating phy/link re-training\r\n");
-
-                                pAppCtxt->prevDevState = CY_USB_DEVICE_STATE_CONFIGURED;
-                                pAppCtxt->devState = CY_USB_DEVICE_STATE_CONFIGURED;
-                                IsDeepSlpExit = true;
-                                #if USBFS_LOGS_ENABLE
-                                Cy_Debug_LogDeInit();
-                                Cy_Debug_LogInit(&dbgCfg);
-                            #endif /*USBFS_LOGS_ENABLE*/
-                            }
-                            else
-                            {
-                                LOG_ERROR("Failed to enter deep sleep mode\r\n");
-                            }
-
-#if LVDS_LOW_POWER_EN
-                            /* Clear training status before initiating low power exit to make the FPGA ready for retraining
-                             * Request for phy and link training
-                             */
-                            Cy_LVDS_PhyGpioClr(LVDSSS_LVDS, LINK_READY_CTL_PORT, LINK_READY_CTL_PIN);
-                            i2cStatus = Cy_I2C_Write(FPGASLAVE_ADDR, FPGA_PHY_LINK_CONTROL_ADDRESS, FPGA_PHY_CONTROL|FPGA_LINK_CONTROL,
-                                                        FPGA_I2C_ADDRESS_WIDTH, FPGA_I2C_DATA_WIDTH);
-                            ASSERT_NON_BLOCK(i2cStatus == CY_SCB_I2C_SUCCESS, i2cStatus);
-#endif
-
-                            i2cStatus = Cy_I2C_Write(FPGASLAVE_ADDR,FPGA_LOW_PWR_MODE_ADDRESS, LVDS_EXIT_LOWPOWER_MODE,
-                                                        FPGA_I2C_ADDRESS_WIDTH, FPGA_I2C_DATA_WIDTH);
-                            ASSERT_NON_BLOCK(i2cStatus == CY_SCB_I2C_SUCCESS, i2cStatus);
-                            if(LVCMOS_EN && IsDeepSlpExit)
-                            {
-                                Cy_LVDS_LVCMOS_Init();
-                                Cy_SysLib_Delay(1);
-                            }
-                        }
-                        else {
-                                DBG_APP_ERR("Failed to enter LVDS L3 state. Current state: %d\r\n", pAppCtxt->devState);
+                            pAppCtxt->devState = pAppCtxt->prevDevState;
                         }
                     }
+
+                    if (pAppCtxt->devState == CY_USB_DEVICE_STATE_SUSPEND)
+                    {
+                        DBG_APP_INFO("Entering DeepDleep\r\n");
+                        Cy_UVC_StreamStartStop(STOP);
+                        Cy_SysLib_DelayUs(1500);
+
+#if LVDS_LOW_POWER_EN
+                        /* Signal the FPGA to initiate L3 Entry */
+                        i2cStatus = Cy_I2C_Write(FPGASLAVE_ADDR, FPGA_LOW_PWR_MODE_ADDRESS, LVDS_L3_MODE_ENTER,
+                                FPGA_I2C_ADDRESS_WIDTH,FPGA_I2C_DATA_WIDTH);
+                        ASSERT_NON_BLOCK(i2cStatus == CY_SCB_I2C_SUCCESS, i2cStatus);
+#endif /* LVDS_LOW_POWER_EN */
+
+                        IsDeepSlpExit = false;
+                        if (Cy_USBD_EnterDeepsleep(pAppCtxt->pUsbdCtxt, pAppCtxt->pCpuDw1Base) == CY_USBD_STATUS_SUCCESS)
+                        {
+#if USBFS_LOGS_ENABLE
+                            Cy_Debug_LogDeInit();
+                            Cy_Debug_LogInit(&dbgCfg);
+#endif /* USBFS_LOGS_ENABLE */
+
+#if LVCMOS_EN
+                            DBG_APP_INFO("Woke up from deep sleep\r\n");
+#else
+                            DBG_APP_INFO("Woke up from deep sleep, initiating phy/link re-training\r\n");
+#endif /* LVCMOS_EN */
+
+                            pAppCtxt->prevDevState = CY_USB_DEVICE_STATE_CONFIGURED;
+                            pAppCtxt->devState = CY_USB_DEVICE_STATE_CONFIGURED;
+                            IsDeepSlpExit = true;
+                        }
+                        else
+                        {
+                            LOG_ERROR("Failed to enter deep sleep mode\r\n");
+                        }
+
+#if LVDS_LOW_POWER_EN
+                        /* Clear training status before initiating low power exit to make the FPGA ready for retraining
+                         * Request for phy and link training
+                         */
+                        Cy_LVDS_PhyGpioClr(LVDSSS_LVDS, LINK_READY_CTL_PORT, LINK_READY_CTL_PIN);
+                        i2cStatus = Cy_I2C_Write(FPGASLAVE_ADDR, FPGA_PHY_LINK_CONTROL_ADDRESS, FPGA_PHY_CONTROL|FPGA_LINK_CONTROL,
+                                FPGA_I2C_ADDRESS_WIDTH, FPGA_I2C_DATA_WIDTH);
+                        ASSERT_NON_BLOCK(i2cStatus == CY_SCB_I2C_SUCCESS, i2cStatus);
+
+                        i2cStatus = Cy_I2C_Write(FPGASLAVE_ADDR,FPGA_LOW_PWR_MODE_ADDRESS, LVDS_EXIT_LOWPOWER_MODE,
+                                FPGA_I2C_ADDRESS_WIDTH, FPGA_I2C_DATA_WIDTH);
+                        ASSERT_NON_BLOCK(i2cStatus == CY_SCB_I2C_SUCCESS, i2cStatus);
+#endif /* LVDS_LOW_POWER_EN */
+
+#if LVCMOS_EN
+                        if (IsDeepSlpExit)
+                        {
+                            Cy_LVDS_LVCMOS_Init();
+                            Cy_SysLib_Delay(1);
+                        }
+#endif /* LVCMOS_EN */
+                    }
+                }
+#endif /* DEEPSLEEP_EN */
                 break;
 
 #if LVDS_LOW_POWER_EN
@@ -1989,8 +2067,9 @@ void Cy_USB_AppInit(cy_stc_usb_app_ctxt_t *pAppCtxt,
         DBG_APP_INFO("xTimer Created\r\n");
         pAppCtxt->firstInitDone = 0x01;
     }
-    /* Zero out the EP0 test buffer. */
-    memset((uint8_t *)Ep0TestBuffer, 0, sizeof(Ep0TestBuffer));
+
+    /* Zero out the EP0 transfer buffer. */
+    memset((uint8_t *)Ep0XferBuffer, 0, sizeof(Ep0XferBuffer));
 } /* End of Cy_USB_AppInit() */
 
 
@@ -2102,7 +2181,7 @@ static void Cy_UVC_AppHandleProduceEvent (
     cy_en_hbdma_mgr_status_t   status;
     cy_stc_hbdma_buff_status_t buffStat;
     cy_stc_usbd_app_msg_t xMsg;
-    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    BaseType_t pdStatus, xHigherPriorityTaskWoken = pdFALSE;
     /* Wait for a free buffer. */
     status = Cy_HBDma_Channel_GetBuffer(pChHandle, &buffStat);
     if (status != CY_HBDMA_MGR_SUCCESS)
@@ -2146,8 +2225,8 @@ static void Cy_UVC_AppHandleProduceEvent (
         pUsbApp->glCons = 0;
         pUsbApp->glProd = 0;
         xMsg.type = FX_PRINT_FRAME_INFO_EVENT;
-        status = xQueueSendFromISR(pUsbApp->uvcMsgQueue, &(xMsg), &(xHigherPriorityTaskWoken));
-        ASSERT_NON_BLOCK(pdTRUE == status,status);
+        pdStatus = xQueueSendFromISR(pUsbApp->uvcMsgQueue, &(xMsg), &(xHigherPriorityTaskWoken));
+        ASSERT_NON_BLOCK(pdTRUE == pdStatus, pdStatus);
     }
 
     if(!buffStat.count)
@@ -2881,8 +2960,9 @@ void Cy_USB_AppSetupCallback(void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
     cy_en_usb_endp_dir_t epDir = CY_USB_ENDP_DIR_INVALID;
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     cy_stc_usbd_app_msg_t xMsg;
-    BaseType_t status = 0;
-    DBG_APP_INFO("AppSetupCallback\r\n\r\n");
+    BaseType_t pdStatus = 0;
+
+    DBG_APP_TRACE("AppSetupCallback\r\n\r\n");
 
     /* Fast enumeration is used. Only requests addressed to the interface, class,
      * vendor and unknown control requests are received by this function. */
@@ -2900,10 +2980,10 @@ void Cy_USB_AppSetupCallback(void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
 
     if (bType == CY_USB_CTRL_REQ_STD)
     {
-        DBG_APP_INFO("CY_USB_CTRL_REQ_STD\r\n");
+        DBG_APP_TRACE("CY_USB_CTRL_REQ_STD\r\n");
         if (bRequest == CY_USB_SC_SET_FEATURE)
         {
-            DBG_APP_INFO("CY_USB_SC_SET_FEATURE\r\n");
+            DBG_APP_TRACE("CY_USB_SC_SET_FEATURE\r\n");
             /* Function Suspend: ACK the request if the device is in configured state in an USB 3.x connection. */
             if ((bTarget == CY_USB_CTRL_REQ_RECIPENT_INTF) &&
                 (wValue == CY_USB_FEATURE_FUNC_SUSPEND))
@@ -2977,8 +3057,8 @@ void Cy_USB_AppSetupCallback(void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
 
                     xMsg.type = CY_USB_UVC_VIDEO_STREAM_STOP_EVENT;
                     xMsg.data[0] = wIndex;
-                    status = xQueueSendFromISR(pUsbApp->uvcMsgQueue, &(xMsg), &(xHigherPriorityTaskWoken));
-                    ASSERT_NON_BLOCK(pdTRUE == status,status);
+                    pdStatus = xQueueSendFromISR(pUsbApp->uvcMsgQueue, &(xMsg), &(xHigherPriorityTaskWoken));
+                    ASSERT_NON_BLOCK(pdTRUE == pdStatus, pdStatus);
                     Cy_USBD_SendACkSetupDataStatusStage(pUsbdCtxt);
                 }
 
@@ -3017,34 +3097,25 @@ void Cy_USB_AppSetupCallback(void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
             Cy_USB_App_KeepLinkActive(pUsbApp);
         }
 
-        DBG_APP_INFO("UVC Class Requests\r\n");
+        DBG_APP_TRACE("UVC Class Requests\r\n");
         /* Handle requests addressed to the Video Control interface. */
         if ((bTarget == CY_USB_CTRL_REQ_RECIPENT_INTF) &&
             (CY_USB_GET_LSB(wIndex) == CY_USB_UVC_INTERFACE_VC))
         {
-            DBG_APP_INFO("CY_USB_CTRL_REQ_RECIPENT_INTF && CY_USB_UVC_INTERFACE_VC\r\n");
+            DBG_APP_TRACE("CY_USB_CTRL_REQ_RECIPENT_INTF && CY_USB_UVC_INTERFACE_VC\r\n");
             /* Respond to CY_USB_UVC_INTERFACE_VC  */
             xMsg.type    = CY_USB_UVC_DEVICE_VIDEO_CNTRL_RQT_EVENT;
             xMsg.data[0] = wLength;
-            status = xQueueSendFromISR(pUsbApp->uvcMsgQueue, &(xMsg), &(xHigherPriorityTaskWoken));
-            ASSERT_NON_BLOCK(pdTRUE == status,status);
+            pdStatus = xQueueSendFromISR(pUsbApp->uvcMsgQueue, &(xMsg), &(xHigherPriorityTaskWoken));
+            ASSERT_NON_BLOCK(pdTRUE == pdStatus, pdStatus);
             isReqHandled = true;
-
-           /* if ((CY_USB_GET_MSB(wIndex) == 0x00) && (wValue == CY_USB_UVC_VC_RQT_ERROR_CODE_CONTROL))
-            {
-                temp = CY_USB_UVC_RQT_STAT_INVALID_CTRL;
-                isReqHandled = true;
-                DBG_APP_INFO("UVC_RQT_STAT_INVALID_CTRL\r\n");
-                Cy_USB_USBD_SendEndp0Data(pUsbdCtxt, &temp, 0x01);
-            }
-            */
         }
 
         /* Handle requests addressed to the Video Streaming interface. */
         if ((bTarget == CY_USB_CTRL_REQ_RECIPENT_INTF) && (CY_USB_GET_LSB(wIndex) == CY_USB_UVC_INTERFACE_VS))
         {
             isReqHandled = true;
-            DBG_APP_INFO("CY_USB_CTRL_REQ_RECIPENT_INTF && CY_USB_UVC_INTERFACE_VS = 0x%x\r\n",CY_GET_LSB(wIndex));
+            DBG_APP_TRACE("CY_USB_CTRL_REQ_RECIPENT_INTF && CY_USB_UVC_INTERFACE_VS = 0x%x\r\n",CY_GET_LSB(wIndex));
             switch (wValue)
             {
 
@@ -3054,16 +3125,16 @@ void Cy_USB_AppSetupCallback(void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
                 switch (bRequest)
                 {
                 case CY_USB_UVC_GET_INFO_REQ:
-                    DBG_APP_INFO("UVC_GET_INFO_REQ\r\n");
-                    Ep0TestBuffer[0] = 3; /* GET/SET requests are supported. */
-                    retStatus = Cy_USB_USBD_SendEndp0Data(pUsbdCtxt, (uint8_t *)Ep0TestBuffer, 0x01);
+                    DBG_APP_TRACE("UVC_GET_INFO_REQ\r\n");
+                    Ep0XferBuffer[0] = 3; /* GET/SET requests are supported. */
+                    retStatus = Cy_USB_USBD_SendEndp0Data(pUsbdCtxt, (uint8_t *)Ep0XferBuffer, 0x01);
                     ASSERT_NON_BLOCK(CY_USBD_STATUS_SUCCESS == retStatus,retStatus);
                     break;
 
                 case CY_USB_UVC_GET_LEN_REQ:
-                    DBG_APP_INFO("UVC_GET_LEN_REQ\r\n");
-                    Ep0TestBuffer[0] = CY_USB_UVC_MAX_PROBE_SETTING;
-                    retStatus = Cy_USB_USBD_SendEndp0Data(pUsbdCtxt, (uint8_t *)Ep0TestBuffer, 0x01);
+                    DBG_APP_TRACE("UVC_GET_LEN_REQ\r\n");
+                    Ep0XferBuffer[0] = CY_USB_UVC_MAX_PROBE_SETTING;
+                    retStatus = Cy_USB_USBD_SendEndp0Data(pUsbdCtxt, (uint8_t *)Ep0XferBuffer, 0x01);
                     ASSERT_NON_BLOCK(CY_USBD_STATUS_SUCCESS == retStatus,retStatus);
                     break;
 
@@ -3073,69 +3144,27 @@ void Cy_USB_AppSetupCallback(void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt,
                 case CY_USB_UVC_GET_DEF_REQ:
                 case CY_USB_UVC_GET_MIN_REQ:
                 case CY_USB_UVC_GET_MAX_REQ:
-                    DBG_APP_INFO("UVC_GET_CUR_DEF_MIN_MAX_REQ:%x \r\n", bRequest);
+                    DBG_APP_TRACE("UVC_GET_CUR_DEF_MIN_MAX_REQ:%x \r\n", bRequest);
 
-                    if (pUsbApp->devSpeed > CY_USBD_USB_DEV_HS)
-                    {
-
-                        if (cy_uvc_currentFrameIndex == CY_USB_UVC_SS_4K_FRAME_INDEX)
-                        {
-                            retStatus = Cy_USB_USBD_SendEndp0Data(pUsbdCtxt,
-                                                                  (uint8_t *)cy_uvc_probectrl_4K, CY_USB_UVC_MAX_PROBE_SETTING);
-                        }
-                        else if (cy_uvc_currentFrameIndex == CY_USB_UVC_SS_720P_FRAME_INDEX)
-                        {
-                            retStatus = Cy_USB_USBD_SendEndp0Data(pUsbdCtxt,
-                                                                  (uint8_t *)cy_uvc_probectrl_720p, CY_USB_UVC_MAX_PROBE_SETTING);
-                        }
-                        else if (cy_uvc_currentFrameIndex == CY_USB_UVC_SS_1080P_FRAME_INDEX)
-                        {
-                            retStatus = Cy_USB_USBD_SendEndp0Data(pUsbdCtxt,
-                                                                  (uint8_t *)cy_uvc_probectrl_1080p, CY_USB_UVC_MAX_PROBE_SETTING);
-                        }
-                        else if (cy_uvc_currentFrameIndex == CY_USB_UVC_SS_VGA_FRAME_INDEX)
-                        {
-                            retStatus = Cy_USB_USBD_SendEndp0Data(pUsbdCtxt,
-                                                                  (uint8_t *)cy_uvc_probectrl_VGA, CY_USB_UVC_MAX_PROBE_SETTING);
-                        }
-                        else
-                        {
-                            DBG_APP_ERR("currentFrameIndex\r\n");
-                        }
-
-                        if (retStatus != CY_USBD_STATUS_SUCCESS)
-                        {
-                            DBG_APP_ERR("Error SendEndp0Data\r\n");
-                        }
-                    }
-                    else
-                    {
-                        if (cy_uvc_currentFrameIndex == CY_USB_UVC_HS_VGA_FRAME_INDEX)
-                        {
-                            retStatus = Cy_USB_USBD_SendEndp0Data(pUsbdCtxt,
-                                                                  (uint8_t *)cy_uvc_probectrl_HS_VGA, CY_USB_UVC_MAX_PROBE_SETTING);
-                        }
-                        else
-                        {
-                            DBG_APP_ERR("currentFrameIndex\r\n");
-                        }
-
-                        if (retStatus != CY_USBD_STATUS_SUCCESS)
-                        {
-                            DBG_APP_ERR("Error SendEndp0Data\r\n");
-                        }
-                    }
-
+                    /*
+                     * Notify the UVC task to handle the GET_CUR request. We need to ensure that the SET_CUR handling
+                     * is complete before GET_CUR response is sent.
+                     */
+                    xMsg.type    = CY_USB_UVC_DEVICE_GET_CUR_RQT;
+                    xMsg.data[0] = wLength;
+                    xMsg.data[1] = wValue;
+                    xQueueSendFromISR(pUsbApp->uvcMsgQueue, &(xMsg), &(xHigherPriorityTaskWoken));
+                    isReqHandled = true;
                     break;
 
                 case CY_USB_UVC_SET_CUR_REQ:
                     /* Since this request has OUT data, it should be handled in task context. */
-                    DBG_APP_INFO("CY_USB_UVC_SET_CUR_REQ\r\n");
+                    DBG_APP_TRACE("CY_USB_UVC_SET_CUR_REQ\r\n");
                     xMsg.type    = CY_USB_UVC_DEVICE_SET_CUR_RQT;
                     xMsg.data[0] = wLength;
                     xMsg.data[1] = wValue;
-                    status = xQueueSendFromISR(pUsbApp->uvcMsgQueue, &(xMsg), &(xHigherPriorityTaskWoken));
-                    ASSERT_NON_BLOCK(pdTRUE == status,status);
+                    pdStatus = xQueueSendFromISR(pUsbApp->uvcMsgQueue, &(xMsg), &(xHigherPriorityTaskWoken));
+                    ASSERT_NON_BLOCK(pdTRUE == pdStatus, pdStatus);
                     isReqHandled = true;
                     break;
 
@@ -3200,16 +3229,19 @@ void Cy_USB_AppSuspendCallback(void *pAppCtxt, cy_stc_usb_usbd_ctxt_t *pUsbdCtxt
                                cy_stc_usb_cal_msg_t *pMsg)
 {
     cy_stc_usb_app_ctxt_t *pUsbApp;
+#if DEEPSLEEP_EN
+    cy_stc_usbd_app_msg_t xMsg;
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+#endif /* DEEPSLEEP_EN */
 
     pUsbApp = (cy_stc_usb_app_ctxt_t *)pAppCtxt;
     pUsbApp->prevDevState = pUsbApp->devState;
     pUsbApp->devState = CY_USB_DEVICE_STATE_SUSPEND;
+
 #if DEEPSLEEP_EN
-    cy_stc_usbd_app_msg_t xMsg;
-    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     xMsg.type = CY_USB_ENTER_DEEPSLEEP;
     xQueueSendFromISR(pUsbApp->uvcMsgQueue, &(xMsg), &(xHigherPriorityTaskWoken));
-#endif
+#endif /* DEEPSLEEP_EN */
 } /* End of Cy_USB_AppSuspendCallback() */
 
 /******************************************************************************

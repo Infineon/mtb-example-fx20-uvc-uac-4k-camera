@@ -7,7 +7,7 @@ This example illustrates the configuration and usage of GPIF III on the EZ-USB&t
 
 [View this README on GitHub.](https://github.com/Infineon/mtb-example-fx20-uvc-uac-4k-camera)
 
-[Provide feedback on this code example.](https://yourvoice.infineon.com/jfe/form/SV_1NTns53sK2yiljn?Q_EED=eyJVbmlxdWUgRG9jIElkIjoiQ0UyNDE3MTAiLCJTcGVjIE51bWJlciI6IjAwMi00MTcxMCIsIkRvYyBUaXRsZSI6IkVaLVVTQiZ0cmFkZTsgRlgyMDogVVNCIFZpZGVvIENsYXNzIChVVkMpIDRLIGNhbWVyYSBhcHBsaWNhdGlvbiIsInJpZCI6InN1bWl0Lmt1bWFyQGluZmluZW9uLmNvbSIsIkRvYyB2ZXJzaW9uIjoiMS4wLjEiLCJEb2MgTGFuZ3VhZ2UiOiJFbmdsaXNoIiwiRG9jIERpdmlzaW9uIjoiTUNEIiwiRG9jIEJVIjoiV0lSRUQiLCJEb2MgRmFtaWx5IjoiU1NfVVNCIn0=)
+[Provide feedback on this code example.](https://yourvoice.infineon.com/jfe/form/SV_1NTns53sK2yiljn?Q_EED=eyJVbmlxdWUgRG9jIElkIjoiQ0UyNDE3MTAiLCJTcGVjIE51bWJlciI6IjAwMi00MTcxMCIsIkRvYyBUaXRsZSI6IkVaLVVTQiZ0cmFkZTsgRlgyMDogVVNCIFZpZGVvIENsYXNzIChVVkMpIDRLIGNhbWVyYSBhcHBsaWNhdGlvbiIsInJpZCI6InN1bWl0Lmt1bWFyQGluZmluZW9uLmNvbSIsIkRvYyB2ZXJzaW9uIjoiMS4wLjIiLCJEb2MgTGFuZ3VhZ2UiOiJFbmdsaXNoIiwiRG9jIERpdmlzaW9uIjoiTUNEIiwiRG9jIEJVIjoiV0lSRUQiLCJEb2MgRmFtaWx5IjoiU1NfVVNCIn0=)
 
 
 ## Requirements
@@ -19,7 +19,7 @@ This example illustrates the configuration and usage of GPIF III on the EZ-USB&t
 
 ## Supported toolchains (make variable 'TOOLCHAIN')
 
-- GNU Arm&reg; Embedded Compiler v11.3.1 (`GCC_ARM`) – Default value of `TOOLCHAIN`
+- GNU Arm&reg; Embedded Compiler v14.2.1 (`GCC_ARM`) – Default value of `TOOLCHAIN`
 - Arm&reg; Compiler v6.22 (`ARM`)
 
 
@@ -600,7 +600,7 @@ Infineon provides a wealth of data at [www.infineon.com](https://www.infineon.co
 
 ## Known Issue: USB High-Speed Functionality
 
-A defect has been observed in the USB High-Speed (HS) functionality. When the firmware is set up for LVDS-WL and both UVC and UAC interfaces are activated, it leads to a DMA adapter overflow. This overflow is caused by contention in the HBDMA, which in turn prevents video from streaming properly. Fix will be provided in the next release (v1.0.1).
+A defect has been observed in the USB High-Speed (HS) functionality. When the firmware is set up for LVDS-WL and both UVC and UAC interfaces are activated, it leads to a DMA adapter overflow. This overflow is caused by contention in the HBDMA, which in turn prevents video from streaming properly. Fix will be provided in the next release (v1.0.3).
 
 ## Document history
 
@@ -616,6 +616,7 @@ Document title: *CE241710* – *EZ-USB&trade; FX20: USB Video Class (UVC) 4K cam
          | Updated FPGA also to support LVDS low power mode
          | Unify DMA implementation used in USB_SS and USB_HS connection.
          | Firmware always uses the Manual DMA configuration when device connected to USB 2.0 host.
+ 1.0.2   | Added IAR compiler support for this code example
 
 <br>
 
